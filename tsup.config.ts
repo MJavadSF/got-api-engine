@@ -18,7 +18,7 @@ export default defineConfig([
       js: `/**
  * got-api-engine
  * A modular, framework-agnostic HTTP proxy engine built on got.
- * @author code-plate
+ * @author MJavadSF
  * @license MIT
  */`,
     },

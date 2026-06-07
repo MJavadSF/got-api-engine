@@ -57,11 +57,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/code-plate/got-api-engine"
+    "url": "https://github.com/MJavadSF/got-api-engine"
   },
-  "homepage": "https://github.com/code-plate/got-api-engine#readme",
+  "homepage": "https://github.com/MJavadSF/got-api-engine#readme",
   "bugs": {
-    "url": "https://github.com/code-plate/got-api-engine/issues"
+    "url": "https://github.com/MJavadSF/got-api-engine/issues"
   },
   "peerDependencies": {
     "got": ">=12.0.0",
