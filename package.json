@@ -1,0 +1,95 @@
+{
+  "name": "got-api-engine",
+  "version": "1.0.0",
+  "description": "A modular, framework-agnostic HTTP proxy engine built on got — supports Next.js Route Handlers, React Server Actions, and vanilla JS/Node.js with full auth, logging, retry, and validation support.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/adapters/next.d.ts",
+      "import": "./dist/adapters/next.mjs",
+      "require": "./dist/adapters/next.js"
+    },
+    "./node": {
+      "types": "./dist/adapters/node.d.ts",
+      "import": "./dist/adapters/node.mjs",
+      "require": "./dist/adapters/node.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run typecheck"
+  },
+  "keywords": [
+    "got",
+    "http",
+    "proxy",
+    "api",
+    "nextjs",
+    "react",
+    "typescript",
+    "fetch",
+    "middleware",
+    "auth",
+    "retry",
+    "logging",
+    "zod",
+    "validation"
+  ],
+  "author": {
+    "name": "Mohammad Javad",
+    "email": "mjavadsf72@gmail.com",
+    "url": "https://github.com/MJavadSF"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/code-plate/got-api-engine"
+  },
+  "homepage": "https://github.com/code-plate/got-api-engine#readme",
+  "bugs": {
+    "url": "https://github.com/code-plate/got-api-engine/issues"
+  },
+  "peerDependencies": {
+    "got": ">=12.0.0",
+    "next": ">=13.0.0",
+    "zod": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "got": "^14.6.6",
+    "jsonwebtoken": "^9.0.3",
+    "uuid": "^14.0.0",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.9.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
