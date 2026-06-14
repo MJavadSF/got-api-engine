@@ -1,6 +1,6 @@
 {
   "name": "got-api-engine",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A modular, framework-agnostic HTTP proxy engine built on got — supports Next.js Route Handlers, React Server Actions, and vanilla JS/Node.js with full auth, logging, retry, and validation support.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
