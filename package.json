@@ -77,19 +77,19 @@
     }
   },
   "dependencies": {
-    "got": "^14.6.6",
+    "got": "^15.0.5",
     "jsonwebtoken": "^9.0.3",
     "uuid": "^14.0.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^25.9.2",
+    "@types/node": "^25.9.3",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
-    "zod": "^3.25.76"
+    "typescript": "^6.0.3",
+    "zod": "^4.4.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

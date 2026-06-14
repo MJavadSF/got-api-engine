@@ -3,7 +3,7 @@
 // =================================================================
 
 import { v4 as uuidv4 } from "uuid";
-import jwt from "jsonwebtoken";
+import { decode as decodeJwt } from "jsonwebtoken";
 import type { AuthMode, AuthProvider, EngineConfig } from "../types";
 
 // ── Unique request ID ────────────────────────────────────────────
@@ -41,7 +41,7 @@ type JwtPayloadLike = { sub?: string; userId?: string; id?: string };
 export function getUserIdFromBearerToken(authHeader?: string | null): string | undefined {
   if (!authHeader?.startsWith("Bearer ")) return undefined;
   try {
-    const payload = jwt.decode(authHeader.slice(7)) as JwtPayloadLike | null;
+    const payload = decodeJwt(authHeader.slice(7)) as JwtPayloadLike | null;
     return payload?.sub ?? payload?.userId ?? payload?.id;
   } catch {
     return undefined;

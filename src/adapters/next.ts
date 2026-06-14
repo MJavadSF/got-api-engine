@@ -3,6 +3,7 @@
 // Route Handlers (App Router) + Server Actions (RSC)
 // =================================================================
 
+import type { OptionsInit } from "got";
 import { GotApiEngine } from "../core/engine";
 import type {
   EngineConfig,
@@ -17,7 +18,6 @@ import {
   parseApiError,
   buildUrl,
   appendParams,
-  resolveAuthHeader,
   isAuthRequired,
   isAuthOptional,
   isAuthDisabled,
@@ -102,19 +102,19 @@ export class NextApiEngine extends GotApiEngine {
       forwardClientIp = true,
     } = options;
 
-    const authMode: AuthMode = auth ?? (this as any).config.defaultAuth;
+    const authMode: AuthMode = auth ?? this.config.defaultAuth;
     const requestId = generateRequestId();
     const elapsed = startTimer();
-    const log = (this as any).log?.child
-      ? (this as any).log.child({ requestId })
-      : (this as any).log ?? createConsoleLogger("got-api-engine");
+    const log = this.log.child
+      ? this.log.child({ requestId })
+      : this.log ?? createConsoleLogger("got-api-engine");
 
     log.info(`[Route] ${method} ${endpoint}`);
 
     try {
       const headers: Record<string, string> = mergeHeaders(
         { "Cache-Control": "no-store" },
-        (this as any).config.defaultHeaders,
+        this.config.defaultHeaders,
         extraHeaders,
       );
 
@@ -140,8 +140,7 @@ export class NextApiEngine extends GotApiEngine {
       }
 
       // Build URL
-      const engineConfig = (this as any).config as EngineConfig;
-      let fullUrl = buildUrl(endpoint, engineConfig.baseUrl);
+      let fullUrl = buildUrl(endpoint, this.config.baseUrl);
       if (method === "GET") {
         const incoming = new URL(req.url).searchParams;
         if (incoming.toString()) {
@@ -182,19 +181,15 @@ export class NextApiEngine extends GotApiEngine {
         }
       }
 
-      // Execute via got
-      const { default: got } = await import("got");
-      const https = await import("https");
-
-      const gotOptions: any = {
+      // ── Execute via the shared httpClient (keep-alive agent reused) ─
+      const gotOptions: OptionsInit = {
         headers,
         method,
-        retry: { limit: retryLimit ?? engineConfig.retryLimit ?? 2, methods: ["GET", "PUT"] },
+        retry: { limit: retryLimit ?? this.config.retryLimit, methods: ["GET", "PUT"] },
         signal: req.signal,
-        timeout: { request: timeoutMs ?? engineConfig.timeoutMs ?? 10000 },
+        timeout: { request: timeoutMs ?? this.config.timeoutMs },
         throwHttpErrors: false,
         responseType: "json",
-        https: { rejectUnauthorized: engineConfig.rejectUnauthorized ?? (process.env.NODE_ENV === "production") },
       };
 
       if (requestBody !== undefined) {
@@ -207,7 +202,7 @@ export class NextApiEngine extends GotApiEngine {
         }
       }
 
-      const response = await got(fullUrl, gotOptions);
+      const response = await this.httpClient(fullUrl, gotOptions);
       const durationMs = elapsed();
 
       if (response.statusCode >= 400) {
@@ -259,7 +254,7 @@ export class NextApiEngine extends GotApiEngine {
     endpoint: string,
     options?: ServerActionOptions<never, TResponse>,
   ) {
-    return this.serverAction<TResponse, never>("GET", endpoint, options as any);
+    return this.serverAction<TResponse, never>("GET", endpoint, options);
   }
 
   serverPost<TResponse = unknown, TBody = unknown>(
@@ -267,7 +262,7 @@ export class NextApiEngine extends GotApiEngine {
     body?: TBody,
     options?: ServerActionOptions<TBody, TResponse>,
   ) {
-    return this.serverAction<TResponse, TBody>("POST", endpoint, { ...options, body } as any);
+    return this.serverAction<TResponse, TBody>("POST", endpoint, { ...options, body });
   }
 
   serverPut<TResponse = unknown, TBody = unknown>(
@@ -275,7 +270,7 @@ export class NextApiEngine extends GotApiEngine {
     body?: TBody,
     options?: ServerActionOptions<TBody, TResponse>,
   ) {
-    return this.serverAction<TResponse, TBody>("PUT", endpoint, { ...options, body } as any);
+    return this.serverAction<TResponse, TBody>("PUT", endpoint, { ...options, body });
   }
 
   serverPatch<TResponse = unknown, TBody = unknown>(
@@ -283,14 +278,14 @@ export class NextApiEngine extends GotApiEngine {
     body?: TBody,
     options?: ServerActionOptions<TBody, TResponse>,
   ) {
-    return this.serverAction<TResponse, TBody>("PATCH", endpoint, { ...options, body } as any);
+    return this.serverAction<TResponse, TBody>("PATCH", endpoint, { ...options, body });
   }
 
   serverDelete<TResponse = unknown>(
     endpoint: string,
     options?: ServerActionOptions<never, TResponse>,
   ) {
-    return this.serverAction<TResponse, never>("DELETE", endpoint, options as any);
+    return this.serverAction<TResponse, never>("DELETE", endpoint, options);
   }
 
   // ── Build route handler set (like the original `api` object) ──

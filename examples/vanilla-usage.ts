@@ -176,7 +176,7 @@ import { z } from "zod";
 const UserSchema = z.object({
   id: z.number(),
   name: z.string(),
-  email: z.string().email(),
+  email: z.email(),
 });
 
 const validatedUser = await api.get<z.infer<typeof UserSchema>>("/users/1", {

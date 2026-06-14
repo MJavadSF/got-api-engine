@@ -44,7 +44,7 @@ export async function GET(req: Request) {
 // ── 3. Route Handler with body validation (app/api/users/route.ts) ─
 const CreateUserSchema = z.object({
   name: z.string().min(2),
-  email: z.string().email(),
+  email: z.email(),
 });
 
 export async function POST(req: Request) {

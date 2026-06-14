@@ -27,6 +27,8 @@ Works with **Next.js** (App Router, Route Handlers, Server Actions), **plain Rea
 
 ## Installation
 
+**Requirements:** Node.js **22+** (required by `got` v15, which is ESM-only and Node 22+ only).
+
 ```bash
 npm install got-api-engine
 # or
@@ -368,7 +370,7 @@ import { z } from "zod";
 
 const CreateUserSchema = z.object({
   name: z.string().min(2),
-  email: z.string().email(),
+  email: z.email(),
 });
 
 // Validate request body

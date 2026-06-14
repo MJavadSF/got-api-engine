@@ -8,6 +8,7 @@ export default defineConfig([
       "adapters/node": "src/adapters/node.ts",
     },
     format: ["cjs", "esm"],
+    target: "node22",
     dts: true,
     splitting: false,
     sourcemap: true,

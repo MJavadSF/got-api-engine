@@ -2,7 +2,7 @@
 // got-api-engine — Core Engine
 // =================================================================
 
-import got, { type Got } from "got";
+import got, { type Got, type OptionsInit } from "got";
 import https from "https";
 
 import type {
@@ -38,7 +38,7 @@ const BODY_METHODS: HttpMethod[] = ["POST", "PUT", "PATCH"];
 // =================================================================
 
 export class GotApiEngine {
-  private readonly config: Required<
+  protected readonly config: Required<
     Pick<
       EngineConfig,
       | "baseUrl"
@@ -52,8 +52,8 @@ export class GotApiEngine {
   > &
     Pick<EngineConfig, "auth" | "defaultHeaders" | "hooks" | "logger">;
 
-  private readonly httpClient: Got;
-  private readonly log: LoggerInterface;
+  protected readonly httpClient: Got;
+  protected readonly log: LoggerInterface;
 
   constructor(config: EngineConfig) {
     const isDev = process.env.NODE_ENV !== "production";
@@ -93,6 +93,18 @@ export class GotApiEngine {
       timeout: { request: this.config.timeoutMs },
       throwHttpErrors: false,
     });
+  }
+
+  // ── Run a group of lifecycle hooks (handles single fn or array) ──
+  protected async runHooks<T>(
+    hooks: T | T[] | undefined,
+    invoke: (hook: T) => void | Promise<void>,
+  ): Promise<void> {
+    if (!hooks) return;
+    const list = Array.isArray(hooks) ? hooks : [hooks];
+    for (const hook of list) {
+      await invoke(hook);
+    }
   }
 
   // ── Public: make a request ────────────────────────────────────
@@ -156,7 +168,7 @@ export class GotApiEngine {
       if (params) fullUrl = appendParams(fullUrl, params);
 
       // ── Build request body ─────────────────────────────────────
-      const requestOpts: Record<string, unknown> = {
+      const requestOpts: OptionsInit = {
         headers,
         method,
         retry: {
@@ -165,11 +177,12 @@ export class GotApiEngine {
         },
         timeout: { request: timeoutMs ?? this.config.timeoutMs },
         throwHttpErrors: false,
+        responseType: "json",
       };
 
       if (customBody !== undefined && BODY_METHODS.includes(method)) {
         if (customBody instanceof FormData) {
-          requestOpts.body = customBody as any;
+          requestOpts.body = customBody;
         } else if (schema) {
           const parsed = schema.safeParse(customBody);
           if (!parsed.success) {
@@ -183,10 +196,10 @@ export class GotApiEngine {
               details: parsed.error.flatten(),
             };
           }
-          requestOpts.json = parsed.data as Record<string, unknown>;
+          requestOpts.json = parsed.data;
           headers["Content-Type"] = "application/json";
         } else if (typeof customBody === "object") {
-          requestOpts.json = customBody as Record<string, unknown>;
+          requestOpts.json = customBody;
           headers["Content-Type"] = "application/json";
         } else {
           requestOpts.body = String(customBody);
@@ -194,36 +207,26 @@ export class GotApiEngine {
       }
 
       // ── Lifecycle: onRequest hooks ─────────────────────────────
-      if (this.config.hooks?.onRequest) {
-        const hooks = Array.isArray(this.config.hooks.onRequest)
-          ? this.config.hooks.onRequest
-          : [this.config.hooks.onRequest];
-        for (const hook of hooks) {
-          await hook({ url: fullUrl, method, headers, body: customBody });
-        }
-      }
+      await this.runHooks(this.config.hooks?.onRequest, (hook) =>
+        hook({ url: fullUrl, method, headers, body: customBody }),
+      );
 
       log.debug(`Calling: ${fullUrl}`);
 
       // ── Execute request ────────────────────────────────────────
-      const response = await (this.httpClient as any)(fullUrl, { ...requestOpts, responseType: "json" }) as { statusCode: number; body: unknown; headers: Record<string, string> };
+      const response = await this.httpClient(fullUrl, requestOpts);
       const durationMs = elapsed();
 
       // ── Lifecycle: onResponse hooks ────────────────────────────
-      if (this.config.hooks?.onResponse) {
-        const hooks = Array.isArray(this.config.hooks.onResponse)
-          ? this.config.hooks.onResponse
-          : [this.config.hooks.onResponse];
-        for (const hook of hooks) {
-          await hook({
-            url: fullUrl,
-            method,
-            status: response.statusCode,
-            body: response.body,
-            durationMs,
-          });
-        }
-      }
+      await this.runHooks(this.config.hooks?.onResponse, (hook) =>
+        hook({
+          url: fullUrl,
+          method,
+          status: response.statusCode,
+          body: response.body,
+          durationMs,
+        }),
+      );
 
       // ── Error status ───────────────────────────────────────────
       if (response.statusCode >= 400) {
@@ -270,14 +273,9 @@ export class GotApiEngine {
       const durationMs = elapsed();
 
       // ── Lifecycle: onError hooks ───────────────────────────────
-      if (this.config.hooks?.onError) {
-        const hooks = Array.isArray(this.config.hooks.onError)
-          ? this.config.hooks.onError
-          : [this.config.hooks.onError];
-        for (const hook of hooks) {
-          await hook({ url: endpoint, method, error, durationMs });
-        }
-      }
+      await this.runHooks(this.config.hooks?.onError, (hook) =>
+        hook({ url: endpoint, method, error, durationMs }),
+      );
 
       // Abort
       if (
