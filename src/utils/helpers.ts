@@ -3,7 +3,6 @@
 // =================================================================
 
 import { v4 as uuidv4 } from "uuid";
-import { decode as decodeJwt } from "jsonwebtoken";
 import type { AuthMode, AuthProvider, EngineConfig } from "../types";
 
 // ── Unique request ID ────────────────────────────────────────────
@@ -36,12 +35,27 @@ export function safeStringify(value: unknown, maxDepth = 3): string {
 }
 
 // ── Extract user ID from JWT bearer token ────────────────────────
+// NOTE: This only *decodes* the (unverified) JWT payload to read a user id
+// for logging/correlation. It performs NO signature verification and must
+// never be used for authorization decisions. Implemented inline to avoid a
+// heavyweight crypto dependency.
 type JwtPayloadLike = { sub?: string; userId?: string; id?: string };
+
+function base64UrlDecode(input: string): string {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+  const b64 = input.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  if (typeof atob === "function") return atob(b64);
+  // Node fallback
+  return Buffer.from(b64, "base64").toString("binary");
+}
 
 export function getUserIdFromBearerToken(authHeader?: string | null): string | undefined {
   if (!authHeader?.startsWith("Bearer ")) return undefined;
   try {
-    const payload = decodeJwt(authHeader.slice(7)) as JwtPayloadLike | null;
+    const token = authHeader.slice(7);
+    const parts = token.split(".");
+    if (parts.length < 2 || !parts[1]) return undefined;
+    const payload = JSON.parse(base64UrlDecode(parts[1])) as JwtPayloadLike | null;
     return payload?.sub ?? payload?.userId ?? payload?.id;
   } catch {
     return undefined;
@@ -174,4 +188,43 @@ export function sanitizeForwardedFor(xff: string | null): string | null {
 export function startTimer(): () => number {
   const start = Date.now();
   return () => Date.now() - start;
+}
+
+// ── Build a stable cache key for a request ───────────────────────
+export function buildCacheKey(
+  method: string,
+  url: string,
+  authHeader?: string | null,
+): string {
+  // Include a short auth fingerprint so different principals don't share
+  // cached responses, without storing the token itself.
+  const authFp = authHeader ? `:${fnv1a(authHeader).toString(36)}` : "";
+  return `${method.toUpperCase()} ${url}${authFp}`;
+}
+
+// Tiny non-crypto hash for cache-key fingerprints (FNV-1a 32-bit).
+function fnv1a(str: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// ── Idempotency key ──────────────────────────────────────────────
+export function generateIdempotencyKey(): string {
+  return uuidv4();
+}
+
+// ── Normalise got response headers to a flat string map ──────────
+export function flattenHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (v === undefined) continue;
+    out[k] = Array.isArray(v) ? v.join(", ") : v;
+  }
+  return out;
 }

@@ -12,6 +12,7 @@ export type {
   ApiResult,
   SuccessResult,
   ErrorResult,
+  ResultMeta,
   HttpMethod,
   AuthMode,
   AuthProvider,
@@ -23,7 +24,32 @@ export type {
   RequestHookContext,
   ResponseHookContext,
   ErrorHookContext,
+  RetryConfig,
+  CacheConfig,
+  CacheStore,
+  CachedResponse,
+  CircuitBreakerConfig,
+  CircuitState,
+  CircuitStateContext,
+  CircuitStateHook,
+  RetryHook,
+  RetryHookContext,
+  RateLimitConfig,
+  SsrfConfig,
+  MetricsSnapshot,
 } from "./types/index";
+
+// ── Production subsystems (advanced / custom usage) ──────────────
+export { CircuitBreaker } from "./core/circuit-breaker";
+export { MemoryCacheStore } from "./core/cache-store";
+export { TokenBucket, RateLimitError } from "./core/rate-limiter";
+export { MetricsCollector } from "./core/metrics";
+export {
+  SsrfError,
+  assertUrlAllowed,
+  buildRedactor,
+  resolveSsrfConfig,
+} from "./core/security";
 
 // ── Auth Providers ────────────────────────────────────────────────
 export {
@@ -48,6 +74,7 @@ export {
   appendParams,
   safeStringify,
   generateRequestId,
+  getUserIdFromBearerToken,
 } from "./utils/helpers";
 
 // ── Node/vanilla adapter (batch, retry) ───────────────────────────

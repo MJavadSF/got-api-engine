@@ -3,7 +3,6 @@
 // Route Handlers (App Router) + Server Actions (RSC)
 // =================================================================
 
-import type { OptionsInit } from "got";
 import { GotApiEngine } from "../core/engine";
 import type {
   EngineConfig,
@@ -15,9 +14,6 @@ import type {
 } from "../types";
 import {
   generateRequestId,
-  parseApiError,
-  buildUrl,
-  appendParams,
   isAuthRequired,
   isAuthOptional,
   isAuthDisabled,
@@ -139,15 +135,14 @@ export class NextApiEngine extends GotApiEngine {
         }
       }
 
-      // Build URL
-      let fullUrl = buildUrl(endpoint, this.config.baseUrl);
+      // Build URL (params handled by request(); query string forwarded for GET)
+      let endpointWithQuery = endpoint;
       if (method === "GET") {
         const incoming = new URL(req.url).searchParams;
         if (incoming.toString()) {
-          fullUrl += (fullUrl.includes("?") ? "&" : "?") + incoming.toString();
+          endpointWithQuery += (endpoint.includes("?") ? "&" : "?") + incoming.toString();
         }
       }
-      if (params) fullUrl = appendParams(fullUrl, params);
 
       // Parse body
       let requestBody: unknown = undefined;
@@ -156,7 +151,6 @@ export class NextApiEngine extends GotApiEngine {
 
       if (customBody !== undefined && isBodyMethod) {
         requestBody = customBody;
-        if (!(customBody instanceof FormData)) headers["Content-Type"] = "application/json";
       } else if (isBodyMethod && contentType.includes("multipart/form-data")) {
         requestBody = await req.formData();
       } else if (isBodyMethod && contentType.includes("application/json")) {
@@ -175,44 +169,39 @@ export class NextApiEngine extends GotApiEngine {
           } else {
             requestBody = rawBody;
           }
-          headers["Content-Type"] = "application/json";
         } catch {
           return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
         }
       }
 
-      // ── Execute via the shared httpClient (keep-alive agent reused) ─
-      const gotOptions: OptionsInit = {
-        headers,
+      // ── Execute through the resilient core pipeline ────────────
+      // (circuit breaker, cache, rate limit, retry, metrics, SSRF)
+      // Auth was already resolved from the incoming request above and placed
+      // in `headers`, so disable engine-side auth resolution to avoid override.
+      const result = await this.request<unknown>({
+        endpoint: endpointWithQuery,
         method,
-        retry: { limit: retryLimit ?? this.config.retryLimit, methods: ["GET", "PUT"] },
+        auth: false,
+        ...(requestBody !== undefined ? { body: requestBody as never } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(retryLimit !== undefined ? { retry: { limit: retryLimit } } : {}),
+        ...(params ? { params } : {}),
+        headers,
         signal: req.signal,
-        timeout: { request: timeoutMs ?? this.config.timeoutMs },
-        throwHttpErrors: false,
-        responseType: "json",
-      };
+      });
 
-      if (requestBody !== undefined) {
-        if (requestBody instanceof FormData) {
-          gotOptions.body = requestBody;
-        } else if (typeof requestBody === "object") {
-          gotOptions.json = requestBody;
-        } else {
-          gotOptions.body = String(requestBody);
-        }
-      }
-
-      const response = await this.httpClient(fullUrl, gotOptions);
       const durationMs = elapsed();
 
-      if (response.statusCode >= 400) {
-        const errorMessage = parseApiError(response.body);
-        log.error(`[Route] Failed: ${response.statusCode}`, { url: fullUrl, durationMs });
-        return NextResponse.json({ error: errorMessage }, { status: response.statusCode });
+      if (!result.ok) {
+        log.error(`[Route] Failed: ${result.status}`, { url: endpoint, durationMs });
+        return NextResponse.json(
+          { error: result.error, ...(result.details ? { details: result.details } : {}) },
+          { status: result.status },
+        );
       }
 
-      log.info(`[Route] OK ${response.statusCode} (${durationMs}ms)`);
-      return NextResponse.json(response.body, { status: response.statusCode });
+      log.info(`[Route] OK ${result.status} (${durationMs}ms)`);
+      return NextResponse.json(result.data, { status: result.status });
     } catch (error: unknown) {
       if (
         error instanceof Error &&

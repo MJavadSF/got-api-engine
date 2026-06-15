@@ -13,15 +13,23 @@ Works with **Next.js** (App Router, Route Handlers, Server Actions), **plain Rea
 
 - **Instance-based** — create isolated engine instances with their own config, auth, and logger
 - **Framework-agnostic** — core works anywhere; Next.js adapter available separately
+- **Circuit breaker** — three-state breaker stops hammering a failing upstream and recovers automatically
+- **Response caching** — in-memory LRU (or bring your own store) with TTL, `stale-while-revalidate`, and ETag/Last-Modified conditional revalidation
+- **Request deduplication** — identical in-flight GET/HEAD requests share a single upstream call (single-flight)
+- **Resilient retries** — exponential backoff with jitter, `Retry-After` support, configurable status codes/methods
+- **Client-side rate limiting** — token-bucket with `wait` or `reject` strategies
+- **SSRF protection** — blocks private/loopback/link-local targets and cross-origin redirects; host allow/block lists
+- **Metrics & observability** — request counts, error/retry/cache/dedupe counters, latency percentiles (p50/p95/p99), live circuit state
+- **Idempotency keys** — auto-attach `Idempotency-Key` to mutating requests so safe retries don't double-execute
+- **Log redaction** — tokens, cookies, and secrets are stripped from logs automatically
 - **Pluggable auth** — static token, dynamic callback, next-auth session, localStorage, or custom
-- **Lifecycle hooks** — `onRequest`, `onResponse`, `onError`
+- **Lifecycle hooks** — `onRequest`, `onResponse`, `onError`, `onRetry`, `onCircuitStateChange`
 - **Schema validation** — Zod-compatible request & response validation (no hard dependency)
 - **Structured logging** — Winston (if installed) or built-in console logger; fully replaceable
-- **Debug mode** — verbose request/response logging with a single flag
-- **Retry + timeout** — configurable per-engine and per-request
-- **Batch requests** — parallel execution with optional concurrency control
+- **Batch requests** — true sliding-window concurrency pool
 - **`extend()`** — fork an engine with partial config overrides
 - **Full TypeScript** — strict types throughout, zero `any` leaks in public API
+- **Zero heavyweight crypto deps** — JWT id extraction is decode-only and dependency-free
 
 ---
 
@@ -113,6 +121,120 @@ export async function getProfile() {
 
 ---
 
+## Production Features (v2.1)
+
+All resilience features are **opt-in** and composable. They run as a pipeline:
+`rate-limit → circuit-breaker → dedupe → cache → request (retry/backoff) → validate → metrics`.
+
+```ts
+const api = createEngine({
+  baseUrl: "https://api.example.com",
+
+  // Response cache (GET/HEAD), in-memory LRU by default
+  cache: {
+    enabled: true,
+    ttlMs: 30_000,
+    staleWhileRevalidate: true,   // serve stale, refresh in background
+    conditional: true,           // ETag / If-None-Match revalidation
+    maxEntries: 500,
+  },
+
+  // Circuit breaker
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 5,         // consecutive failures to open
+    failureRateThreshold: 0.5,   // OR 50% error rate over the rolling window
+    rollingWindow: 20,
+    resetTimeoutMs: 30_000,      // cooldown before half-open probe
+    successThreshold: 2,         // successes in half-open to close
+  },
+
+  // Client-side rate limiting (token bucket)
+  rateLimit: {
+    enabled: true,
+    requestsPerInterval: 20,
+    intervalMs: 1_000,
+    burst: 40,
+    onLimit: "wait",             // or "reject" → fail fast with 429
+  },
+
+  // Retry layer (exponential backoff + jitter, engine-managed)
+  retry: {
+    limit: 3,
+    baseDelayMs: 200,
+    maxDelayMs: 10_000,
+    jitter: 0.2,
+    retryStatusCodes: [408, 425, 429, 500, 502, 503, 504],
+    respectRetryAfter: true,
+  },
+
+  dedupe: true,                  // collapse identical in-flight GET/HEAD
+  idempotency: true,             // auto Idempotency-Key on POST/PUT/PATCH
+  ssrfProtection: true,          // block private/loopback + cross-origin redirects
+  metrics: true,                 // default on
+  redactKeys: ["x-internal-token"],
+});
+```
+
+### Observability & control
+
+```ts
+const m = api.getMetrics();
+// { totalRequests, successCount, errorCount, retryCount, cacheHits,
+//   cacheMisses, dedupeHits, rateLimitedCount, circuitRejectedCount,
+//   circuitState, latency: { p50, p95, p99, mean, min, max, count }, byStatus }
+
+api.getCircuitState();   // "closed" | "open" | "half-open"
+api.resetCircuit();
+await api.clearCache();
+await api.invalidateCache("GET", "/users/1");
+api.resetMetrics();
+```
+
+### Per-request overrides
+
+```ts
+await api.get("/feed", { cache: { ttlMs: 5_000, staleWhileRevalidate: true } });
+await api.get("/live", { cache: false });            // bypass cache
+await api.post("/pay", body, { idempotencyKey: "order-42" });
+await api.get("/once", { dedupe: false, retry: false });
+await api.get("/slow", { signal: controller.signal }); // AbortSignal
+```
+
+### Result metadata
+
+Every result carries a `meta` block:
+
+```ts
+const r = await api.get("/users");
+r.meta?.cached;     // served from cache?
+r.meta?.stale;      // stale-while-revalidate hit?
+r.meta?.deduped;    // joined an in-flight request?
+r.meta?.attempts;   // number of attempts (1 = no retry)
+r.meta?.durationMs; // total wall-clock time
+```
+
+Error results also include a machine-readable `code`: `CIRCUIT_OPEN`,
+`RATE_LIMITED`, `TIMEOUT`, `SSRF_BLOCKED`, `AUTH_REQUIRED`, `HTTP_ERROR`,
+`REQUEST_VALIDATION`, `RESPONSE_VALIDATION`, `NETWORK_ERROR`, `ABORTED`.
+
+### Custom cache store (e.g. Redis)
+
+```ts
+import type { CacheStore, CachedResponse } from "got-api-engine";
+
+const redisStore: CacheStore = {
+  async get(key) { /* … */ return undefined; },
+  async set(key, value, ttlMs) { /* … */ },
+  async delete(key) { /* … */ },
+  async clear() { /* … */ },
+};
+
+createEngine({ baseUrl, cache: { enabled: true, store: redisStore } });
+```
+
+---
+
 ## API Reference
 
 ### `createEngine(config)` / `createNextEngine(config)`
@@ -185,6 +307,21 @@ interface RequestOptions<TBody, TResponse> {
   headers?: Record<string, string>;
   params?: Record<string, string | number | boolean>;
 }
+```
+
+---
+
+---
+
+#### Observability & control methods
+
+```ts
+api.getMetrics():       MetricsSnapshot | null   // null if metrics disabled
+api.resetMetrics():     void
+api.getCircuitState():  "closed" | "open" | "half-open"
+api.resetCircuit():     void
+api.clearCache():       Promise<void>
+api.invalidateCache(method, endpoint, opts?): Promise<void>
 ```
 
 ---
@@ -444,7 +581,13 @@ const result = await withRetry(
 got-api-engine
 ├── src/
 │   ├── core/
-│   │   └── engine.ts          ← GotApiEngine class (framework-agnostic)
+│   │   ├── engine.ts          ← GotApiEngine class (framework-agnostic pipeline)
+│   │   ├── circuit-breaker.ts ← three-state circuit breaker
+│   │   ├── cache-store.ts     ← in-memory LRU response cache
+│   │   ├── rate-limiter.ts    ← token-bucket rate limiter
+│   │   ├── metrics.ts         ← metrics collector (latency percentiles)
+│   │   ├── backoff.ts         ← exponential backoff + jitter helpers
+│   │   └── security.ts        ← SSRF guard + log redaction
 │   ├── adapters/
 │   │   ├── next.ts            ← NextApiEngine (Route Handlers + Server Actions)
 │   │   └── node.ts            ← batchRequests, withRetry

@@ -31,43 +31,58 @@ export async function batchRequests<
   },
 ): Promise<TResults> {
   const { concurrency, failFast = false } = options ?? {};
-
   const results: Record<string, ApiResult> = {};
 
   if (!concurrency || concurrency >= requests.length) {
-    // All parallel
+    // All parallel.
     const settled = await Promise.allSettled(
       requests.map((r) => engine.request(r.options).then((res) => ({ key: r.key, res }))),
     );
-
     for (const s of settled) {
       if (s.status === "fulfilled") {
         results[s.value.key] = s.value.res;
+        if (failFast && !s.value.res.ok) {
+          throw new Error(s.value.res.error ?? "Request failed");
+        }
       } else if (failFast) {
         throw s.reason;
       }
     }
-  } else {
-    // Controlled concurrency
-    for (let i = 0; i < requests.length; i += concurrency) {
-      const chunk = requests.slice(i, i + concurrency);
-      const settled = await Promise.allSettled(
-        chunk.map((r) => engine.request(r.options).then((res) => ({ key: r.key, res }))),
-      );
+    return results as TResults;
+  }
 
-      for (const s of settled) {
-        if (s.status === "fulfilled") {
-          results[s.value.key] = s.value.res;
-          if (failFast && !s.value.res.ok) {
-            throw new Error((s.value.res as any).error ?? "Request failed");
-          }
-        } else if (failFast) {
-          throw s.reason;
+  // Sliding-window pool: keep exactly `concurrency` requests in flight,
+  // starting the next as soon as any finishes (higher throughput than
+  // fixed chunks, which stall on the slowest item in each chunk).
+  let cursor = 0;
+  let aborted: unknown = null;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      if (aborted) return;
+      const index = cursor++;
+      if (index >= requests.length) return;
+      const item = requests[index]!;
+      try {
+        const res = await engine.request(item.options);
+        results[item.key] = res;
+        if (failFast && !res.ok) {
+          aborted = new Error(res.error ?? "Request failed");
+          return;
+        }
+      } catch (err) {
+        if (failFast) {
+          aborted = err;
+          return;
         }
       }
     }
-  }
+  };
 
+  const pool = Array.from({ length: Math.min(concurrency, requests.length) }, () => worker());
+  await Promise.all(pool);
+
+  if (aborted) throw aborted;
   return results as TResults;
 }
 
@@ -82,8 +97,7 @@ export async function withRetry<T>(
 ): Promise<ApiResult<T>> {
   const { retries = 3, baseDelayMs = 300, shouldRetry } = options ?? {};
 
-  const defaultShouldRetry = (r: ApiResult<T>) =>
-    !r.ok && (r as any).status >= 500;
+  const defaultShouldRetry = (r: ApiResult<T>) => !r.ok && r.status >= 500;
 
   const check = shouldRetry ?? defaultShouldRetry;
 
