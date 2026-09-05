@@ -2,6 +2,29 @@
 
 All notable changes to **got-api-engine** are documented here.
 
+## [2.1.1] - 2026-09-05
+
+A maintenance release focused on **dependency updates and React 19 compatibility**. No runtime API or behaviour changes were introduced.
+
+### Changed — Dependencies
+
+* Added **React 19.2+** as a peer dependency to explicitly declare compatibility with React-based consumers.
+* Updated **`got`** from `^15.0.5` to `^15.1.0`.
+* Updated **`uuid`** from `^14.0.0` to `^14.0.2`.
+* Updated **`zod`** development dependency from `^4.4.3` to `^4.5.4`.
+
+### Compatibility
+
+* React `>=19.2.0` is now explicitly declared as a peer dependency.
+* Existing Node.js requirement remains unchanged: **Node.js >=22.0.0**.
+* Existing `next` and `zod` peer dependency requirements remain unchanged.
+* No changes were made to the public API, exports, runtime behaviour, or build configuration.
+
+### Notes
+
+This release is backward compatible with `2.1.0`. The update primarily aligns the package metadata and dependency versions with the current supported ecosystem.
+
+
 ## [2.1.0] - 2026-06-15
 
 A major **performance + production-resilience** release. Fully backward

@@ -1,6 +1,6 @@
 {
   "name": "got-api-engine",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "A modular, framework-agnostic HTTP proxy engine built on got \u2014 production-grade with circuit breaker, response caching, rate limiting, request dedupe, retries with backoff, SSRF protection, metrics, and full Next.js / Node.js support.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -73,8 +73,9 @@
     "url": "https://github.com/MJavadSF/got-api-engine/issues"
   },
   "peerDependencies": {
-    "got": ">=13.0.0",
     "next": ">=13.0.0",
+    "react": ">=19.2.0",
+    "got": ">=13.0.0",
     "zod": ">=3.0.0"
   },
   "peerDependenciesMeta": {
@@ -86,15 +87,15 @@
     }
   },
   "dependencies": {
-    "got": "^15.0.5",
-    "uuid": "^14.0.0",
+    "got": "^15.1.0",
+    "uuid": "^14.0.2",
     "winston": "^3.19.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "engines": {
     "node": ">=22.0.0"
