@@ -49,7 +49,7 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.examples.json",
-    "test": "TEST_CERT_DIR=${TEST_CERT_DIR:-} vitest run",
+    "test": "vitest run",
     "test:watch": "vitest",
     "lint:package": "publint && attw --pack . --profile node16",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
