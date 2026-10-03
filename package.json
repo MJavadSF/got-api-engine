@@ -1,26 +1,43 @@
 {
   "name": "got-api-engine",
-  "version": "2.1.1",
-  "description": "A modular, framework-agnostic HTTP proxy engine built on got \u2014 production-grade with circuit breaker, response caching, rate limiting, request dedupe, retries with backoff, SSRF protection, metrics, and full Next.js / Node.js support.",
-  "main": "./dist/index.js",
+  "version": "3.0.0",
+  "description": "A modular, framework-agnostic HTTP proxy engine built on got 16 — circuit breaker, response caching (SWR / stale-if-error), rate limiting, request dedupe, retries with backoff, 401 token refresh, SSRF & credential-leak protection, metrics, and first-class Next.js / Node.js support.",
+  "type": "commonjs",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./next": {
-      "types": "./dist/adapters/next.d.ts",
-      "import": "./dist/adapters/next.mjs",
-      "require": "./dist/adapters/next.js"
+      "import": {
+        "types": "./dist/adapters/next.d.mts",
+        "default": "./dist/adapters/next.mjs"
+      },
+      "require": {
+        "types": "./dist/adapters/next.d.cts",
+        "default": "./dist/adapters/next.cjs"
+      }
     },
     "./node": {
-      "types": "./dist/adapters/node.d.ts",
-      "import": "./dist/adapters/node.mjs",
-      "require": "./dist/adapters/node.js"
-    }
+      "import": {
+        "types": "./dist/adapters/node.d.mts",
+        "default": "./dist/adapters/node.mjs"
+      },
+      "require": {
+        "types": "./dist/adapters/node.d.cts",
+        "default": "./dist/adapters/node.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -29,34 +46,42 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck"
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.examples.json",
+    "test": "TEST_CERT_DIR=${TEST_CERT_DIR:-} vitest run",
+    "test:watch": "vitest",
+    "lint:package": "publint && attw --pack . --profile node16",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
-    "got",
-    "http",
-    "proxy",
     "api",
-    "nextjs",
-    "react",
-    "typescript",
-    "fetch",
-    "middleware",
     "auth",
-    "retry",
-    "logging",
-    "zod",
-    "validation",
-    "circuit-breaker",
-    "rate-limit",
     "cache",
-    "resilience",
-    "ssrf",
-    "metrics",
+    "circuit-breaker",
     "dedupe",
-    "observability"
+    "fetch",
+    "got",
+    "got-16",
+    "http",
+    "http2",
+    "logging",
+    "metrics",
+    "middleware",
+    "nextjs",
+    "observability",
+    "proxy",
+    "rate-limit",
+    "react",
+    "resilience",
+    "retry",
+    "ssrf",
+    "stale-while-revalidate",
+    "token-refresh",
+    "typescript",
+    "typescript-7",
+    "validation",
+    "zod"
   ],
   "author": {
     "name": "Mohammad Javad",
@@ -66,7 +91,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MJavadSF/got-api-engine"
+    "url": "git+https://github.com/MJavadSF/got-api-engine.git"
   },
   "homepage": "https://github.com/MJavadSF/got-api-engine#readme",
   "bugs": {
@@ -75,11 +100,17 @@
   "peerDependencies": {
     "next": ">=13.0.0",
     "react": ">=19.2.0",
-    "got": ">=13.0.0",
+    "winston": ">=3.0.0",
     "zod": ">=3.0.0"
   },
   "peerDependenciesMeta": {
     "next": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "winston": {
       "optional": true
     },
     "zod": {
@@ -87,17 +118,20 @@
     }
   },
   "dependencies": {
-    "got": "^15.1.0",
-    "uuid": "^14.0.2",
-    "winston": "^3.19.0"
+    "got": "^16.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
-    "tsup": "^8.5.1",
-    "typescript": "^6.0.3",
-    "zod": "^4.5.4"
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@types/node": "^22.20.4",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "winston": "^3.19.0",
+    "zod": "^4.6.5"
   },
   "engines": {
     "node": ">=22.0.0"
-  }
+  },
+  "sideEffects": false
 }

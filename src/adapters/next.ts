@@ -1,55 +1,41 @@
 // =================================================================
 // got-api-engine/next — Next.js Adapter
 // Route Handlers (App Router) + Server Actions (RSC)
+//
+// Uses only the standard Web `Response` — no runtime dependency on
+// `next/server`, so it works with any Next.js version (13 → 16), the Edge-free
+// Node runtime, and other Web-standard frameworks.
 // =================================================================
 
 import { GotApiEngine } from "../core/engine";
 import type {
-  EngineConfig,
-  RequestOptions,
   ApiResult,
   AuthMode,
+  EngineConfig,
+  ErrorResult,
   HttpMethod,
+  ParamValue,
+  RequestOptions,
+  ResponseType,
   ZodLike,
 } from "../types";
 import {
   generateRequestId,
-  isAuthRequired,
-  isAuthOptional,
+  getHeader,
   isAuthDisabled,
+  isAuthOptional,
+  isAuthRequired,
   mergeHeaders,
   sanitizeForwardedFor,
+  sanitizeRequestId,
+  schemaErrorDetails,
   startTimer,
+  setHeader,
 } from "../utils/helpers";
-import { createConsoleLogger } from "../utils/logger";
 
-// Lazy import Next.js to avoid bundling it in non-Next environments
-type NextResponseLike = {
-  json(body: unknown, init?: { status?: number }): NextResponseLike;
-};
-
-async function getNextResponse(): Promise<{
-  NextResponse: { json: (body: unknown, init?: ResponseInit) => Response };
-}> {
-  try {
-    return await import("next/server" as string) as any;
-  } catch {
-    // Fallback for non-Next environments: use standard Response
-    return {
-      NextResponse: {
-        json: (body: unknown, init?: ResponseInit) =>
-          new Response(JSON.stringify(body), {
-            headers: { "Content-Type": "application/json" },
-            ...init,
-          }),
-      },
-    };
-  }
-}
-
-// =================================================================
-// NEXT.JS ENGINE — extends GotApiEngine with Next-specific methods
-// =================================================================
+const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE", "QUERY"]);
+const NULL_BODY_STATUS: ReadonlySet<number> = new Set([101, 204, 205, 304]);
+const DEFAULT_FORWARD_HEADERS = ["content-disposition", "content-language", "etag", "last-modified", "retry-after"];
 
 export interface NextRouteHandlerOptions<TBody = unknown> {
   endpoint: string;
@@ -59,19 +45,41 @@ export interface NextRouteHandlerOptions<TBody = unknown> {
   timeoutMs?: number;
   retryLimit?: number;
   headers?: Record<string, string>;
-  params?: Record<string, string | number | boolean>;
+  params?: Record<string, ParamValue>;
   /** Custom body override (ignores req.body) */
   body?: TBody;
-  /** Forward X-Forwarded-For from incoming request */
+  /** Forward X-Forwarded-For from the incoming request. @default true */
   forwardClientIp?: boolean;
+  /** How to decode the upstream response. @default engine default ("auto") */
+  responseType?: ResponseType;
+  /**
+   * Upstream response headers copied to the client (case-insensitive).
+   * `false` forwards none. `Set-Cookie` is never forwarded unless listed.
+   * @default content-disposition, content-language, etag, last-modified, retry-after
+   */
+  forwardResponseHeaders?: string[] | false;
+  /**
+   * Include the upstream error body (`details`) in error responses.
+   * @default true for 4xx, false for 5xx (avoids leaking backend internals)
+   */
+  exposeUpstreamDetails?: boolean;
+  /**
+   * If the incoming request has no `Authorization` header, authenticate with
+   * the engine's own `auth` (service credentials). Off by default: enabling it
+   * lets unauthenticated clients act with the engine's credentials.
+   * @default false
+   */
+  useEngineAuth?: boolean;
+  /** Forward the query string of the incoming request. @default true */
+  forwardQuery?: boolean;
 }
 
 export type ServerActionOptions<TBody = unknown, TResponse = unknown> = Omit<
   RequestOptions<TBody, TResponse>,
   "endpoint" | "method"
 > & {
-  /** next-auth Session-like object with access_token */
-  session?: { access_token?: string; user?: { id?: string } } | null;
+  /** next-auth / Auth.js session-like object carrying an access token */
+  session?: { access_token?: string; accessToken?: string; user?: { id?: string } } | null;
 };
 
 export class NextApiEngine extends GotApiEngine {
@@ -84,7 +92,6 @@ export class NextApiEngine extends GotApiEngine {
     req: Request,
     options: NextRouteHandlerOptions<TBody>,
   ): Promise<Response> {
-    const { NextResponse } = await getNextResponse();
     const {
       endpoint,
       method = "GET",
@@ -96,14 +103,19 @@ export class NextApiEngine extends GotApiEngine {
       params,
       body: customBody,
       forwardClientIp = true,
+      forwardQuery = true,
+      responseType,
+      useEngineAuth = false,
     } = options;
 
     const authMode: AuthMode = auth ?? this.config.defaultAuth;
-    const requestId = generateRequestId();
+    const requestId =
+      sanitizeRequestId(req.headers.get("x-request-id")) ?? generateRequestId();
     const elapsed = startTimer();
-    const log = this.log.child
-      ? this.log.child({ requestId })
-      : this.log ?? createConsoleLogger("got-api-engine");
+    const log = this.log.child ? this.log.child({ requestId }) : this.log;
+
+    const respond = (body: unknown, status: number): Response =>
+      jsonResponse(body, status, requestId);
 
     log.info(`[Route] ${method} ${endpoint}`);
 
@@ -114,77 +126,87 @@ export class NextApiEngine extends GotApiEngine {
         extraHeaders,
       );
 
-      // Forward client IP
       if (forwardClientIp) {
         const xff = sanitizeForwardedFor(req.headers.get("x-forwarded-for"));
-        if (xff) headers["x-forwarded-for"] = xff;
+        if (xff) setHeader(headers, "x-forwarded-for", xff);
       }
 
-      // Auth from incoming request
+      // ── Auth: forward the caller's credentials ────────────────
+      let engineAuthMode: AuthMode = false;
       if (!isAuthDisabled(authMode)) {
-        const incomingToken = req.headers.get("Authorization");
-        if (isAuthRequired(authMode) && !incomingToken?.startsWith("Bearer ")) {
+        const incoming = req.headers.get("Authorization")?.trim();
+        if (incoming) {
+          setHeader(headers, "Authorization", incoming);
+        } else if (useEngineAuth && this.config.auth !== undefined) {
+          engineAuthMode = authMode; // let the engine resolve service credentials
+        } else if (isAuthRequired(authMode)) {
           log.warn("[Route] Missing Authorization header");
-          return NextResponse.json(
-            { error: "Authorization token is required." },
-            { status: 401 },
-          );
-        }
-        if (incomingToken?.startsWith("Bearer ") && (isAuthRequired(authMode) || isAuthOptional(authMode))) {
-          headers["Authorization"] = incomingToken;
+          return respond({ error: "Authorization token is required." }, 401);
+        } else if (!isAuthOptional(authMode)) {
+          return respond({ error: "Authorization token is required." }, 401);
         }
       }
 
-      // Build URL (params handled by request(); query string forwarded for GET)
+      // ── Query string ──────────────────────────────────────────
       let endpointWithQuery = endpoint;
-      if (method === "GET") {
-        const incoming = new URL(req.url).searchParams;
-        if (incoming.toString()) {
-          endpointWithQuery += (endpoint.includes("?") ? "&" : "?") + incoming.toString();
-        }
+      if (forwardQuery) {
+        const incomingQuery = new URL(req.url).searchParams.toString();
+        if (incomingQuery) endpointWithQuery += (endpoint.includes("?") ? "&" : "?") + incomingQuery;
       }
 
-      // Parse body
+      // ── Body ──────────────────────────────────────────────────
       let requestBody: unknown = undefined;
-      const isBodyMethod = ["POST", "PUT", "PATCH"].includes(method);
+      const isBodyMethod = BODY_METHODS.has(method);
       const contentType = req.headers.get("Content-Type") ?? "";
 
       if (customBody !== undefined && isBodyMethod) {
         requestBody = customBody;
-      } else if (isBodyMethod && contentType.includes("multipart/form-data")) {
-        requestBody = await req.formData();
-      } else if (isBodyMethod && contentType.includes("application/json")) {
-        try {
-          const rawBody = await req.json();
-          if (schema) {
-            const parsed = schema.safeParse(rawBody);
-            if (!parsed.success) {
-              log.warn("[Route] Body validation failed");
-              return NextResponse.json(
-                { error: "Validation error.", details: parsed.error.flatten() },
-                { status: 400 },
-              );
+      } else if (isBodyMethod && req.body !== null) {
+        if (contentType.includes("multipart/form-data")) {
+          requestBody = await req.formData();
+        } else if (/[/+]json/i.test(contentType)) {
+          const text = await req.text();
+          if (text.trim() !== "") {
+            let rawBody: unknown;
+            try {
+              rawBody = JSON.parse(text);
+            } catch {
+              return respond({ error: "Invalid JSON body." }, 400);
             }
-            requestBody = parsed.data;
-          } else {
-            requestBody = rawBody;
+            if (schema) {
+              const parsed = schema.safeParse(rawBody);
+              if (!parsed.success) {
+                log.warn("[Route] Body validation failed");
+                return respond(
+                  { error: "Validation error.", details: schemaErrorDetails(parsed.error) },
+                  400,
+                );
+              }
+              requestBody = parsed.data;
+            } else {
+              requestBody = rawBody;
+            }
           }
-        } catch {
-          return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+        } else {
+          // Any other payload (text, form-urlencoded, octet-stream…) is proxied verbatim.
+          const buf = Buffer.from(await req.arrayBuffer());
+          if (buf.length > 0) {
+            requestBody = buf;
+            if (contentType) setHeader(headers, "Content-Type", contentType);
+          }
         }
       }
 
-      // ── Execute through the resilient core pipeline ────────────
-      // (circuit breaker, cache, rate limit, retry, metrics, SSRF)
-      // Auth was already resolved from the incoming request above and placed
-      // in `headers`, so disable engine-side auth resolution to avoid override.
+      // ── Execute through the resilient core pipeline ───────────
       const result = await this.request<unknown>({
         endpoint: endpointWithQuery,
         method,
-        auth: false,
+        auth: engineAuthMode,
+        requestId,
         ...(requestBody !== undefined ? { body: requestBody as never } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(retryLimit !== undefined ? { retry: { limit: retryLimit } } : {}),
+        ...(retryLimit !== undefined ? { retryLimit } : {}),
+        ...(responseType ? { responseType } : {}),
         ...(params ? { params } : {}),
         headers,
         signal: req.signal,
@@ -194,25 +216,72 @@ export class NextApiEngine extends GotApiEngine {
 
       if (!result.ok) {
         log.error(`[Route] Failed: ${result.status}`, { url: endpoint, durationMs });
-        return NextResponse.json(
-          { error: result.error, ...(result.details ? { details: result.details } : {}) },
-          { status: result.status },
-        );
+        return this.errorResponse(result, options, requestId);
       }
 
       log.info(`[Route] OK ${result.status} (${durationMs}ms)`);
-      return NextResponse.json(result.data, { status: result.status });
+      return this.successResponse(result, options, requestId);
     } catch (error: unknown) {
       if (
         error instanceof Error &&
-        (error.name === "AbortError" || (error as any).code === "ABORT_ERR")
+        (error.name === "AbortError" || (error as { code?: string }).code === "ABORT_ERR")
       ) {
-        return NextResponse.json({ error: "Request aborted." }, { status: 499 });
+        return respond({ error: "Request aborted." }, 499);
       }
       const msg = error instanceof Error ? error.message : "Internal server error.";
       log.error(`[Route] Exception: ${msg}`);
-      return NextResponse.json({ error: msg }, { status: 500 });
+      return respond({ error: msg }, 500);
     }
+  }
+
+  private errorResponse(
+    result: ErrorResult,
+    options: NextRouteHandlerOptions<never> | NextRouteHandlerOptions<unknown>,
+    requestId: string,
+  ): Response {
+    const expose =
+      options.exposeUpstreamDetails ??
+      (result.code !== "HTTP_ERROR" || result.status < 500);
+    const payload: Record<string, unknown> = { error: result.error };
+    if (expose && result.details !== undefined) payload["details"] = result.details;
+    if (result.code) payload["code"] = result.code;
+
+    const res = jsonResponse(payload, result.status, requestId);
+    const retryAfter = result.meta?.retryAfterMs;
+    if (retryAfter !== undefined) res.headers.set("Retry-After", String(Math.ceil(retryAfter / 1000)));
+    return res;
+  }
+
+  private successResponse(
+    result: Extract<ApiResult<unknown>, { ok: true }>,
+    options: NextRouteHandlerOptions<never> | NextRouteHandlerOptions<unknown>,
+    requestId: string,
+  ): Response {
+    const { status, data, headers: upstream = {} } = result;
+    const out = new Headers();
+    out.set("X-Request-Id", requestId);
+
+    const allow =
+      options.forwardResponseHeaders === false
+        ? []
+        : (options.forwardResponseHeaders ?? DEFAULT_FORWARD_HEADERS);
+    for (const name of allow) {
+      const v = getHeader(upstream, name);
+      if (v !== undefined) out.set(name, v);
+    }
+
+    if (NULL_BODY_STATUS.has(status)) return new Response(null, { status, headers: out });
+
+    if (Buffer.isBuffer(data)) {
+      out.set("Content-Type", getHeader(upstream, "content-type") ?? "application/octet-stream");
+      return new Response(new Uint8Array(data), { status, headers: out });
+    }
+    if (typeof data === "string") {
+      out.set("Content-Type", getHeader(upstream, "content-type") ?? "text/plain; charset=utf-8");
+      return new Response(data, { status, headers: out });
+    }
+    out.set("Content-Type", "application/json");
+    return new Response(JSON.stringify(data ?? null), { status, headers: out });
   }
 
   // ── Server Action proxy (RSC / Server Components) ────────────
@@ -223,26 +292,21 @@ export class NextApiEngine extends GotApiEngine {
   ): Promise<ApiResult<TResponse>> {
     const { session, ...reqOpts } = options ?? {};
 
-    // If session is provided, inject the token
-    let authToken = reqOpts.authToken;
-    if (!authToken && session?.access_token) {
-      authToken = session.access_token;
-    }
+    // If a session is provided, inject its token
+    const sessionToken = session?.access_token ?? session?.accessToken;
+    const authToken = reqOpts.authToken ?? sessionToken;
 
     return this.request<TResponse, TBody>({
       ...reqOpts,
       endpoint,
       method,
-      authToken,
+      ...(authToken ? { authToken } : {}),
     });
   }
 
   // ── Shorthand server actions ──────────────────────────────────
 
-  serverGet<TResponse = unknown>(
-    endpoint: string,
-    options?: ServerActionOptions<never, TResponse>,
-  ) {
+  serverGet<TResponse = unknown>(endpoint: string, options?: ServerActionOptions<never, TResponse>) {
     return this.serverAction<TResponse, never>("GET", endpoint, options);
   }
 
@@ -270,33 +334,35 @@ export class NextApiEngine extends GotApiEngine {
     return this.serverAction<TResponse, TBody>("PATCH", endpoint, { ...options, body });
   }
 
-  serverDelete<TResponse = unknown>(
-    endpoint: string,
-    options?: ServerActionOptions<never, TResponse>,
-  ) {
+  serverDelete<TResponse = unknown>(endpoint: string, options?: ServerActionOptions<never, TResponse>) {
     return this.serverAction<TResponse, never>("DELETE", endpoint, options);
   }
 
-  // ── Build route handler set (like the original `api` object) ──
+  // ── Build route handler set ───────────────────────────────────
   buildRouteHandlers() {
-    const self = this;
     return {
       GET: (req: Request, endpoint: string, auth?: AuthMode) =>
-        self.handleRoute(req, { endpoint, method: "GET", auth }),
+        this.handleRoute(req, { endpoint, method: "GET", ...(auth !== undefined ? { auth } : {}) }),
 
       POST: <TBody = unknown>(req: Request, opts: Omit<NextRouteHandlerOptions<TBody>, "method">) =>
-        self.handleRoute<TBody>(req, { ...opts, method: "POST" }),
+        this.handleRoute<TBody>(req, { ...opts, method: "POST" }),
 
       PUT: <TBody = unknown>(req: Request, opts: Omit<NextRouteHandlerOptions<TBody>, "method">) =>
-        self.handleRoute<TBody>(req, { ...opts, method: "PUT" }),
+        this.handleRoute<TBody>(req, { ...opts, method: "PUT" }),
 
       PATCH: <TBody = unknown>(req: Request, opts: Omit<NextRouteHandlerOptions<TBody>, "method">) =>
-        self.handleRoute<TBody>(req, { ...opts, method: "PATCH" }),
+        this.handleRoute<TBody>(req, { ...opts, method: "PATCH" }),
 
       DELETE: (req: Request, endpoint: string, auth?: AuthMode) =>
-        self.handleRoute(req, { endpoint, method: "DELETE", auth }),
+        this.handleRoute(req, { endpoint, method: "DELETE", ...(auth !== undefined ? { auth } : {}) }),
     };
   }
+}
+
+function jsonResponse(body: unknown, status: number, requestId: string): Response {
+  const headers = new Headers({ "Content-Type": "application/json", "X-Request-Id": requestId });
+  if (NULL_BODY_STATUS.has(status)) return new Response(null, { status, headers });
+  return new Response(JSON.stringify(body), { status, headers });
 }
 
 // ── Factory ───────────────────────────────────────────────────────

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "paths": {
+      "got-api-engine": ["./src/index.ts"],
+      "got-api-engine/next": ["./src/adapters/next.ts"],
+      "got-api-engine/node": ["./src/adapters/node.ts"]
+    }
+  },
+  "include": ["examples/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

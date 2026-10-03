@@ -8,8 +8,11 @@ import {
   createStaticAuth,
   createDynamicAuth,
   createBrowserStorageAuth,
+  createApiKeyAuth,
+  createBasicAuth,
   batchRequests,
   withRetry,
+  BatchRequestError,
 } from "got-api-engine";
 
 // ── 1. Basic instance ─────────────────────────────────────────────
@@ -68,6 +71,11 @@ const browserApi = createEngine({
   debug: false,
 });
 
+// ── 4b. API key / Basic auth ─────────────────────────────────────
+// The API key travels in its own header (default X-API-Key), not in Authorization.
+const keyApi = createEngine({ baseUrl: "https://api.example.com", auth: createApiKeyAuth("k-123") });
+const basicApi = createEngine({ baseUrl: "https://api.example.com", auth: createBasicAuth("user", "pass") });
+
 // ── 5. Per-request auth override ─────────────────────────────────
 const result = await api.get("/admin/stats", {
   authToken: "temporary-admin-token",
@@ -98,7 +106,7 @@ const trackedApi = createEngine({
   },
 });
 
-// ── 8. Extend — fork with overrides ─────────────────────────────
+// ── 8. Extend — fork with overrides (inherits the parent's FULL config) ──
 const adminApi = api.extend({
   defaultHeaders: { "X-Admin": "true" },
   timeoutMs: 30_000,
@@ -136,13 +144,30 @@ const batch2 = await batchRequests(
   { concurrency: 2 }, // 2 at a time
 );
 
-// ── 10. Retry with custom backoff ────────────────────────────────
+// Fail fast: the first error aborts in-flight requests and skips the rest.
+try {
+  await batchRequests(
+    api,
+    [
+      { key: "a", options: { endpoint: "/resource/a" } },
+      { key: "b", options: { endpoint: "/resource/b" } },
+    ],
+    { concurrency: 2, failFast: true },
+  );
+} catch (err) {
+  if (err instanceof BatchRequestError) console.error(`"${err.key}" failed:`, err.message);
+}
+
+// ── 10. Retry with custom backoff (outside the engine's own retry) ─
+// Default policy retries only transient failures (network, 408/425/429, 5xx except 501/505).
 const resilientResult = await withRetry(
-  () => api.get("/flaky-endpoint"),
+  (attempt) => api.get("/flaky-endpoint", { retry: false, headers: { "X-Attempt": String(attempt) } }),
   {
     retries: 5,
-    baseDelayMs: 500, // 500ms, 1s, 2s, 4s, 8s
-    shouldRetry: (r) => !r.ok && (r as any).status >= 500,
+    baseDelayMs: 500, // ~500ms, 1s, 2s, 4s, 8s (capped, with jitter)
+    maxDelayMs: 10_000,
+    shouldRetry: (r) => !r.ok && r.status >= 500, // `r` is fully typed — no `as any`
+    onRetry: ({ attempt, delayMs }) => console.warn(`attempt ${attempt} failed, waiting ${delayMs}ms`),
   },
 );
 
@@ -187,3 +212,7 @@ if (validatedUser.ok) {
   // data is guaranteed to match UserSchema
   console.log(validatedUser.data.email);
 }
+
+// ── 13. Cleanup ───────────────────────────────────────────────────
+await Promise.all([api, authedApi, dynamicApi, browserApi, keyApi, basicApi, trackedApi, adminApi, v2Api, apiWithPino].map((e) => e.dispose()));
+void [users, created, result, filtered, usersResult, postsResult, batchResult, batch2, resilientResult];

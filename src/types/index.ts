@@ -2,7 +2,16 @@
 // got-api-engine — Core Types
 // =================================================================
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
+export type HttpMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "DELETE"
+  | "PATCH"
+  | "HEAD"
+  | "OPTIONS"
+  /** HTTP QUERY — safe, idempotent request with a body (supported by got 16). */
+  | "QUERY";
 
 export type AuthMode =
   | boolean          // true = required, false = none
@@ -10,9 +19,24 @@ export type AuthMode =
   | "bearer"         // alias for true
   | "none";          // alias for false
 
-// ── Zod-compatible schema shape (avoids hard peer-dep) ──────────
+/**
+ * How the response body is decoded.
+ * - `auto`   (default) JSON → object, text → string, binary → Buffer, decided by Content-Type
+ * - `json`   strict JSON (parse failure → `PARSE_ERROR`)
+ * - `text`   always a string
+ * - `buffer` always a Node.js Buffer (downloads, images, PDFs…)
+ */
+export type ResponseType = "auto" | "json" | "text" | "buffer";
+
+export type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
+
+// ── Schema shape (Zod / Valibot / ArkType compatible) ────────────
 export interface ZodLike<T> {
-  safeParse(data: unknown): { success: true; data: T } | { success: false; error: { flatten(): unknown } };
+  safeParse(
+    data: unknown,
+  ):
+    | { success: true; data: T }
+    | { success: false; error: { flatten?: () => unknown; issues?: unknown } };
 }
 
 // ── Logger interface — bring your own logger ─────────────────────
@@ -27,18 +51,27 @@ export interface LoggerInterface {
 // ── Auth provider — pluggable ────────────────────────────────────
 export interface AuthProvider {
   /**
-   * Return the Authorization header value (e.g. "Bearer <token>")
-   * or null/undefined if no auth is available.
+   * Return the Authorization header value (e.g. "Bearer <token>", "Basic …")
+   * or null/undefined if no auth is available. A bare token without a scheme
+   * is treated as a Bearer token.
    */
   getAuthHeader(): string | null | undefined | Promise<string | null | undefined>;
+
+  /**
+   * Optional: additional / alternative credential headers, e.g.
+   * `{ "X-API-Key": "…" }`. Merged into the request when present.
+   */
+  getHeaders?(): Record<string, string> | null | undefined | Promise<Record<string, string> | null | undefined>;
 }
 
 // ── Request / Response hooks ─────────────────────────────────────
 export interface RequestHookContext {
   url: string;
   method: HttpMethod;
+  /** Mutable: changes made by the hook are sent upstream. */
   headers: Record<string, string>;
   body?: unknown;
+  requestId?: string;
 }
 
 export interface ResponseHookContext {
@@ -47,6 +80,7 @@ export interface ResponseHookContext {
   status: number;
   body: unknown;
   durationMs: number;
+  requestId?: string;
 }
 
 export interface ErrorHookContext {
@@ -54,11 +88,29 @@ export interface ErrorHookContext {
   method: HttpMethod;
   error: unknown;
   durationMs: number;
+  requestId?: string;
 }
 
 export type RequestHook = (ctx: RequestHookContext) => void | Promise<void>;
 export type ResponseHook = (ctx: ResponseHookContext) => void | Promise<void>;
 export type ErrorHook = (ctx: ErrorHookContext) => void | Promise<void>;
+
+/** Context passed to `refreshAuth` after an upstream 401. */
+export interface RefreshAuthContext {
+  url: string;
+  method: HttpMethod;
+  requestId: string;
+}
+
+/**
+ * Called (single-flight) when the upstream answers 401 to a request that used
+ * the engine's configured `auth`. Perform your token refresh here. Return the
+ * new token/header, or nothing if your `auth` provider will now yield the new
+ * token by itself. The request is then replayed once.
+ */
+export type RefreshAuthHook = (
+  ctx: RefreshAuthContext,
+) => string | null | undefined | void | Promise<string | null | undefined | void>;
 
 // ── Engine-level configuration ───────────────────────────────────
 export interface EngineConfig {
@@ -80,19 +132,60 @@ export interface EngineConfig {
   auth?: string | (() => string | null | undefined | Promise<string | null | undefined>) | AuthProvider;
 
   /**
-   * Default timeout in milliseconds.
+   * Called once (single-flight) when the upstream replies 401 to a request that
+   * used the engine's `auth`; the request is then retried a single time.
+   */
+  refreshAuth?: RefreshAuthHook;
+
+  /**
+   * Extra hosts (exact or `*.suffix`) that may receive this engine's
+   * credentials in addition to the `baseUrl` origin. Requests to any other
+   * origin (absolute URLs) that would carry credentials are refused with
+   * `CREDENTIALS_BLOCKED`, which prevents token leaks to attacker-controlled URLs.
+   */
+  credentialHosts?: string[];
+
+  /**
+   * Default timeout in milliseconds for a single attempt.
    * @default 10000
    */
   timeoutMs?: number;
 
   /**
-   * Default retry limit for retryable methods (GET, PUT).
+   * Overall deadline in ms for a request *including* retries and backoff.
+   * Disabled by default.
+   */
+  totalTimeoutMs?: number;
+
+  /**
+   * Default retry limit (beyond the first try). Only idempotent methods are
+   * retried unless `retry.methods` says otherwise.
    * @default 2
    */
   retryLimit?: number;
 
   /**
-   * Custom logger. If omitted, falls back to built-in winston logger or console.
+   * Default response decoding.
+   * @default "auto"
+   */
+  responseType?: ResponseType;
+
+  /**
+   * Use got 16's built-in HTTP/2 client (ALPN negotiation, pooled sessions,
+   * multiplexing). The engine then omits its own https keep-alive agent, since
+   * a custom https agent forces got onto the HTTP/1.1 path. @default false
+   */
+  http2?: boolean;
+
+  /**
+   * Enable got 16's built-in DNS cache. Keep it off for internal hostnames.
+   * Compatible with `ssrfProtection` (the guarded lookup wraps it). @default false
+   */
+  dnsCache?: boolean;
+
+  /**
+   * Custom logger. If omitted, a built-in console logger is used
+   * (use `await createLogger()` to get the Winston-backed one).
    */
   logger?: LoggerInterface;
 
@@ -103,8 +196,14 @@ export interface EngineConfig {
   debug?: boolean;
 
   /**
+   * Minimum level for the built-in logger. Overrides `debug` and the
+   * `LOG_LEVEL` environment variable.
+   */
+  logLevel?: LogLevel;
+
+  /**
    * Service name used in log output.
-   * @default "got-api-engine"
+   * @default process.env.LOG_NAME ?? "got-api-engine"
    */
   serviceName?: string;
 
@@ -114,11 +213,17 @@ export interface EngineConfig {
   defaultHeaders?: Record<string, string>;
 
   /**
-   * Whether to reject self-signed TLS certificates.
-   * Automatically false in development (NODE_ENV !== "production").
-   * @default true in production
+   * Whether to verify TLS certificates. Set to `false` ONLY for local
+   * development against self-signed certificates.
+   * @default true (in every environment)
    */
   rejectUnauthorized?: boolean;
+
+  /**
+   * If set (e.g. `"X-Request-Id"`), the request's correlation id is sent
+   * upstream under this header.
+   */
+  requestIdHeader?: string;
 
   /**
    * Lifecycle hooks.
@@ -146,7 +251,7 @@ export interface EngineConfig {
   circuitBreaker?: CircuitBreakerConfig;
 
   /**
-   * Client-side rate limiting (token bucket).
+   * Client-side rate limiting (token bucket) applied to every upstream attempt.
    * Disabled unless `enabled: true`.
    */
   rateLimit?: RateLimitConfig;
@@ -158,22 +263,21 @@ export interface EngineConfig {
   dedupe?: boolean;
 
   /**
-   * Exponential backoff retry layer applied on top of got's own retry.
-   * Adds jitter and retries on network errors + configurable status codes.
+   * Exponential backoff retry layer (engine-managed; got's own retry is disabled).
    */
   retry?: RetryConfig;
 
   /**
-   * SSRF protection — block requests resolving to private/loopback ranges
-   * and disallow cross-origin redirects. Recommended `true` for any engine
-   * that forwards user-controlled URLs.
+   * SSRF protection — block requests to private/loopback ranges (including
+   * DNS names that *resolve* to them) and disallow cross-origin redirects.
+   * Recommended `true` for any engine that forwards user-controlled URLs.
    * @default false
    */
   ssrfProtection?: boolean | SsrfConfig;
 
   /**
-   * Header/body keys to redact in logs (case-insensitive).
-   * Merged with sensible defaults (authorization, cookie, set-cookie, etc.).
+   * Header/body/query keys to redact in logs (case-insensitive).
+   * Merged with sensible defaults (authorization, cookie, token, …).
    */
   redactKeys?: string[];
 
@@ -185,7 +289,7 @@ export interface EngineConfig {
 
   /**
    * Automatically attach an `Idempotency-Key` header to mutating requests
-   * so safe retries don't double-execute on the server.
+   * (POST/PUT/PATCH). With a key present, POST/PATCH become safely retryable.
    * @default false
    */
   idempotency?: boolean;
@@ -203,10 +307,20 @@ export interface RetryConfig {
   jitter?: number;
   /** HTTP status codes that should trigger a retry. @default [408,425,429,500,502,503,504] */
   retryStatusCodes?: number[];
-  /** HTTP methods eligible for retry. @default ["GET","HEAD","PUT","DELETE","OPTIONS"] */
+  /**
+   * HTTP methods eligible for retry.
+   * @default ["GET","HEAD","PUT","DELETE","OPTIONS","QUERY"]  (idempotent methods).
+   * POST/PATCH are additionally retried when the request carries an
+   * `Idempotency-Key`, unless you set this list explicitly.
+   */
   methods?: HttpMethod[];
   /** Respect a `Retry-After` response header when present. @default true */
   respectRetryAfter?: boolean;
+  /**
+   * If `Retry-After` asks for a longer wait than this, do not retry and return
+   * the error immediately (with `meta.retryAfterMs`). @default = maxDelayMs
+   */
+  maxRetryAfterMs?: number;
 }
 
 // ── Response cache configuration ─────────────────────────────────
@@ -218,9 +332,19 @@ export interface CacheConfig {
   maxEntries?: number;
   /**
    * Serve a stale cached response immediately while revalidating in the
-   * background. @default false
+   * background (one revalidation per key). @default false
    */
   staleWhileRevalidate?: boolean;
+  /**
+   * If the upstream fails (network error, timeout, 5xx, open circuit) serve
+   * the stale cached response instead of the error. @default false
+   */
+  staleIfError?: boolean;
+  /**
+   * How long past expiry an entry stays usable for `staleWhileRevalidate`,
+   * `staleIfError` and conditional revalidation. @default 300000
+   */
+  staleTtlMs?: number;
   /** Methods eligible for caching. @default ["GET","HEAD"] */
   methods?: HttpMethod[];
   /** Provide a custom cache store (e.g. Redis-backed). */
@@ -230,6 +354,21 @@ export interface CacheConfig {
    * (sends `If-None-Match` / `If-Modified-Since`). @default true
    */
   conditional?: boolean;
+  /**
+   * Derive the TTL from the upstream `Cache-Control: max-age` header
+   * (`no-cache` → always revalidate). Falls back to `ttlMs`. @default false
+   */
+  respectCacheControl?: boolean;
+  /**
+   * After a successful POST/PUT/PATCH/DELETE, drop cached GET/HEAD entries for
+   * the same resource (and any `Location` / `Content-Location`). @default true
+   */
+  invalidateOnMutation?: boolean;
+  /**
+   * Return a copy of cached data so callers cannot mutate the cache.
+   * @default true
+   */
+  cloneOnRead?: boolean;
 }
 
 /** Pluggable cache store. Defaults to an in-memory LRU. */
@@ -238,6 +377,11 @@ export interface CacheStore {
   set(key: string, value: CachedResponse, ttlMs: number): void | Promise<void>;
   delete(key: string): void | Promise<void>;
   clear(): void | Promise<void>;
+  /**
+   * Optional: delete every key matching the predicate (used for
+   * `invalidateOnMutation`). Stores that omit it only get exact-key invalidation.
+   */
+  deleteMatching?(predicate: (key: string) => boolean): void | Promise<void>;
 }
 
 export interface CachedResponse {
@@ -269,6 +413,8 @@ export interface CircuitBreakerConfig {
   resetTimeoutMs?: number;
   /** Successes required in half-open to fully close. @default 2 */
   successThreshold?: number;
+  /** Concurrent probe requests allowed while half-open. @default 1 */
+  halfOpenMaxConcurrent?: number;
   /** Status codes counted as failures. @default [500,502,503,504] */
   failureStatusCodes?: number[];
 }
@@ -283,7 +429,7 @@ export interface RateLimitConfig {
   /** Max burst (bucket capacity). @default = requestsPerInterval */
   burst?: number;
   /**
-   * When the bucket is empty: "wait" (queue until a token frees up) or
+   * When the bucket is empty: "wait" (FIFO queue until a token frees up) or
    * "reject" (fail fast with status 429). @default "wait"
    */
   onLimit?: "wait" | "reject";
@@ -296,12 +442,17 @@ export interface SsrfConfig {
   enabled?: boolean;
   /** Allow requests to private/loopback IP ranges. @default false */
   allowPrivateNetworks?: boolean;
-  /** Explicit allowlist of hostnames (exact or *.suffix). */
+  /** Explicit allowlist of hostnames (exact or *.suffix). Authoritative when set. */
   allowHosts?: string[];
   /** Explicit blocklist of hostnames. */
   blockHosts?: string[];
   /** Follow redirects only within the original origin. @default true */
   sameOriginRedirectsOnly?: boolean;
+  /**
+   * Also validate the IP addresses a hostname *resolves to* at connect time
+   * (defeats DNS-rebinding and names pointing at internal IPs). @default true
+   */
+  checkResolvedAddresses?: boolean;
 }
 
 // ── Circuit / retry hooks ────────────────────────────────────────
@@ -331,9 +482,13 @@ export interface MetricsSnapshot {
   retryCount: number;
   cacheHits: number;
   cacheMisses: number;
+  /** Stale responses served (stale-while-revalidate or stale-if-error). */
+  staleServed: number;
   dedupeHits: number;
   rateLimitedCount: number;
   circuitRejectedCount: number;
+  /** Number of `refreshAuth` invocations. */
+  authRefreshes: number;
   circuitState: CircuitState;
   /** Latency in ms. */
   latency: {
@@ -349,6 +504,14 @@ export interface MetricsSnapshot {
 }
 
 // ── Per-request options ──────────────────────────────────────────
+export type ParamValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ReadonlyArray<string | number | boolean | null | undefined>;
+
 export interface RequestOptions<TBody = unknown, TResponse = unknown> {
   /** Endpoint path (e.g. "/users/1") or full URL */
   endpoint: string;
@@ -362,7 +525,7 @@ export interface RequestOptions<TBody = unknown, TResponse = unknown> {
   /** Override auth token for this request */
   authToken?: string;
 
-  /** Request body (for POST/PUT/PATCH) */
+  /** Request body. Objects/arrays → JSON; string, Buffer, URLSearchParams, Blob, FormData are sent as-is. */
   body?: TBody | FormData;
 
   /** Zod-compatible schema for request body validation */
@@ -371,8 +534,11 @@ export interface RequestOptions<TBody = unknown, TResponse = unknown> {
   /** Expected response schema for validation */
   responseSchema?: ZodLike<TResponse>;
 
-  /** Override timeout for this request */
+  /** Override timeout (per attempt) for this request */
   timeoutMs?: number;
+
+  /** Overall deadline including retries for this request */
+  totalTimeoutMs?: number;
 
   /** Override retry limit for this request */
   retryLimit?: number;
@@ -380,8 +546,14 @@ export interface RequestOptions<TBody = unknown, TResponse = unknown> {
   /** Additional headers for this request */
   headers?: Record<string, string>;
 
-  /** Additional query params (merged with any in the URL) */
-  params?: Record<string, string | number | boolean>;
+  /** Additional query params (arrays become repeated keys) */
+  params?: Record<string, ParamValue>;
+
+  /** Override response decoding for this request */
+  responseType?: ResponseType;
+
+  /** Supply your own correlation id (e.g. an incoming `X-Request-Id`). */
+  requestId?: string;
 
   /** AbortSignal to cancel this request. */
   signal?: AbortSignal;
@@ -400,7 +572,7 @@ export interface RequestOptions<TBody = unknown, TResponse = unknown> {
   /** Override the idempotency key for this request. */
   idempotencyKey?: string;
 
-  /** Per-request retry override. */
+  /** Per-request retry override (merged over the engine's retry config). */
   retry?: RetryConfig | false;
 }
 
@@ -408,8 +580,10 @@ export interface RequestOptions<TBody = unknown, TResponse = unknown> {
 export interface ResultMeta {
   /** Whether this response was served from cache. */
   cached?: boolean;
-  /** Whether a stale cached response was served while revalidating. */
+  /** Whether a stale cached response was served. */
   stale?: boolean;
+  /** Why a stale response was served. */
+  staleReason?: "revalidating" | "error";
   /** Whether this response joined an in-flight deduplicated request. */
   deduped?: boolean;
   /** Number of attempts made (1 = no retries). */
@@ -418,6 +592,8 @@ export interface ResultMeta {
   durationMs?: number;
   /** Correlation id for this request. */
   requestId?: string;
+  /** Upstream `Retry-After` in ms, when it was too long to honour. */
+  retryAfterMs?: number;
 }
 
 export interface SuccessResult<T = unknown> {
@@ -432,8 +608,14 @@ export interface ErrorResult {
   ok: false;
   error: string;
   status: number;
+  /** Validation errors, or the upstream error body for HTTP errors. */
   details?: unknown;
-  /** Machine-readable error code (e.g. CIRCUIT_OPEN, RATE_LIMITED, TIMEOUT). */
+  /**
+   * Machine-readable error code: CIRCUIT_OPEN, RATE_LIMITED, TIMEOUT, ABORTED,
+   * SSRF_BLOCKED, AUTH_REQUIRED, AUTH_PROVIDER_ERROR, CREDENTIALS_BLOCKED,
+   * HTTP_ERROR, REQUEST_VALIDATION, RESPONSE_VALIDATION, PARSE_ERROR,
+   * INVALID_URL, NETWORK_ERROR, ENGINE_DISPOSED, INTERNAL_ERROR.
+   */
   code?: string;
   meta?: ResultMeta;
 }

@@ -1,24 +1,28 @@
 {
   "compilerOptions": {
     "target": "ES2023",
+    "lib": ["ES2023", "ESNext.Disposable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
+    "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
     "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
     "resolveJsonModule": true,
-    "ignoreDeprecations": "6.0"
+
+    "noEmit": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "examples"]
+  "exclude": ["node_modules", "dist", "examples", "test"]
 }

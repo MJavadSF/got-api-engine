@@ -1,47 +1,39 @@
 // =================================================================
 // examples/nextjs-usage.ts
-// Complete Next.js App Router example
+// Next.js App Router (13 → 16): Route Handlers + Server Actions
 // =================================================================
 
-import { createNextEngine, createNextAuthProvider } from "got-api-engine/next";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth"; // your next-auth config
+import { createNextEngine } from "got-api-engine/next";
+import { createNextAuthProvider } from "got-api-engine";
+import { auth } from "@/lib/auth"; // Auth.js (next-auth v5) — your config
 import { z } from "zod";
 
-// ── 1. Create ONE engine instance (share across your app) ─────────
+// ── 1. Create ONE engine instance (share it across your app) ─────
 export const apiEngine = createNextEngine({
-  baseUrl: process.env.NEXT_PUBLIC_API_URL!,
+  baseUrl: process.env.API_URL!, // server-side env — no NEXT_PUBLIC_ needed
   serviceName: "MyApp",
-  debug: process.env.NODE_ENV !== "production",
   timeoutMs: 15_000,
-  retryLimit: 2,
-  defaultHeaders: {
-    "Accept-Language": "en",
-    "X-App-Version": "1.0.0",
-  },
-  // Auth is sourced from incoming request headers in Route Handlers,
-  // but for Server Actions you supply the session:
-  hooks: {
-    onRequest: (ctx) => {
-      console.log(`→ ${ctx.method} ${ctx.url}`);
-    },
-    onResponse: (ctx) => {
-      console.log(`← ${ctx.status} in ${ctx.durationMs}ms`);
-    },
-  },
+  defaultHeaders: { "Accept-Language": "fa", "X-App-Version": "1.0.0" },
+
+  // For Server Actions / RSC: read the Auth.js session on every call.
+  // (Route Handlers forward the *caller's* Authorization header instead.)
+  auth: createNextAuthProvider(() => auth()),
+
+  // Correlate logs across services: incoming X-Request-Id is reused and
+  // sent to the backend under this header.
+  requestIdHeader: "X-Request-Id",
+
+  cache: { enabled: true, ttlMs: 10_000, staleWhileRevalidate: true },
+  circuitBreaker: { enabled: true },
 });
 
-// ── 2. Route Handler (app/api/users/route.ts) ─────────────────────
-// This proxies GET /api/users → YOUR_BACKEND/users
+// ── 2. Route Handler (app/api/users/route.ts) ────────────────────
+// GET /api/users?page=2 → BACKEND/users?page=2   (query string is forwarded)
 export async function GET(req: Request) {
-  return apiEngine.handleRoute(req, {
-    endpoint: "/users",
-    method: "GET",
-    auth: true, // requires Bearer token
-  });
+  return apiEngine.handleRoute(req, { endpoint: "/users", method: "GET", auth: true });
 }
 
-// ── 3. Route Handler with body validation (app/api/users/route.ts) ─
+// ── 3. Body validation ───────────────────────────────────────────
 const CreateUserSchema = z.object({
   name: z.string().min(2),
   email: z.email(),
@@ -51,53 +43,59 @@ export async function POST(req: Request) {
   return apiEngine.handleRoute(req, {
     endpoint: "/users",
     method: "POST",
-    schema: CreateUserSchema,
+    schema: CreateUserSchema, // 400 + field errors before touching the backend
   });
 }
 
-// ── 4. Route Handler — dynamic segment (app/api/users/[id]/route.ts)
-export async function PUT(
-  req: Request,
-  { params }: { params: { id: string } },
-) {
+// ── 4. Dynamic segment (app/api/users/[id]/route.ts) ─────────────
+// Next.js 15+: `params` is a Promise — await it.
+export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return apiEngine.handleRoute(req, {
-    endpoint: `/users/${params.id}`,
+    endpoint: `/users/${encodeURIComponent(id)}`, // always encode user-controlled segments
     method: "PUT",
     schema: CreateUserSchema.partial(),
   });
 }
 
-// ── 5. Server Action (app/actions/user.ts) ────────────────────────
-"use server";
-
-export async function fetchCurrentUser() {
-  const session = await getServerSession(authOptions);
-
-  const result = await apiEngine.serverGet("/me", {
-    session, // automatically extracts session.access_token
-    auth: true,
+// ── 5. Binary / file proxy (app/api/invoices/[id]/pdf/route.ts) ──
+// PDFs and other binary payloads stream through with their content-type,
+// and Content-Disposition is forwarded so the browser downloads it properly.
+export async function GET_PDF(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return apiEngine.handleRoute(req, {
+    endpoint: `/invoices/${encodeURIComponent(id)}/pdf`,
+    responseType: "buffer",
+    forwardResponseHeaders: ["content-disposition", "etag"],
   });
+}
 
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-
+// ── 6. Server Actions ────────────────────────────────────────────
+// Put these in a file that starts with "use server".
+export async function fetchCurrentUser() {
+  "use server";
+  // The engine's Auth.js provider attaches the session token automatically.
+  const result = await apiEngine.serverGet<{ id: string; name: string }>("/me");
+  if (!result.ok) throw new Error(result.error);
   return result.data;
 }
 
 export async function createUserAction(data: { name: string; email: string }) {
-  const session = await getServerSession(authOptions);
-
-  return apiEngine.serverPost("/users", data, {
-    session,
-    schema: CreateUserSchema,
-  });
+  "use server";
+  return apiEngine.serverPost("/users", data, { schema: CreateUserSchema });
 }
 
-// ── 6. Using buildRouteHandlers() for compact route files ─────────
-// app/api/products/route.ts
+// ── 7. Compact route files with buildRouteHandlers() ─────────────
 const routes = apiEngine.buildRouteHandlers();
-
 export const GET2 = (req: Request) => routes.GET(req, "/products");
 export const POST2 = (req: Request) =>
-  routes.POST(req, { endpoint: "/products", schema: z.any() });
+  routes.POST(req, { endpoint: "/products", schema: z.looseObject({}) });
+
+// ── 8. Security knobs for proxies ────────────────────────────────
+// • By default a Route Handler only forwards the caller's own Authorization
+//   header. It never falls back to the engine's service credentials, because
+//   that would let anonymous visitors act with them. Opt in explicitly:
+export const SERVICE_PUBLIC = (req: Request) =>
+  apiEngine.handleRoute(req, { endpoint: "/catalog", useEngineAuth: true });
+// • Backend 5xx bodies are not echoed to the browser (they may contain stack
+//   traces); 4xx field errors are. Override with `exposeUpstreamDetails`.

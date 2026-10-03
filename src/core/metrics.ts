@@ -16,9 +16,11 @@ export class MetricsCollector {
   retryCount = 0;
   cacheHits = 0;
   cacheMisses = 0;
+  staleServed = 0;
   dedupeHits = 0;
   rateLimitedCount = 0;
   circuitRejectedCount = 0;
+  authRefreshes = 0;
 
   private readonly byStatus = new Map<number, number>();
 
@@ -67,6 +69,12 @@ export class MetricsCollector {
   recordCacheMiss(): void {
     this.cacheMisses++;
   }
+  recordStale(): void {
+    this.staleServed++;
+  }
+  recordAuthRefresh(): void {
+    this.authRefreshes++;
+  }
   recordDedupeHit(): void {
     this.dedupeHits++;
   }
@@ -92,9 +100,11 @@ export class MetricsCollector {
       retryCount: this.retryCount,
       cacheHits: this.cacheHits,
       cacheMisses: this.cacheMisses,
+      staleServed: this.staleServed,
       dedupeHits: this.dedupeHits,
       rateLimitedCount: this.rateLimitedCount,
       circuitRejectedCount: this.circuitRejectedCount,
+      authRefreshes: this.authRefreshes,
       circuitState,
       latency: {
         count: this.latencySeen,
@@ -118,9 +128,11 @@ export class MetricsCollector {
     this.retryCount = 0;
     this.cacheHits = 0;
     this.cacheMisses = 0;
+    this.staleServed = 0;
     this.dedupeHits = 0;
     this.rateLimitedCount = 0;
     this.circuitRejectedCount = 0;
+    this.authRefreshes = 0;
     this.byStatus.clear();
     this.latencies.length = 0;
     this.latencySeen = 0;

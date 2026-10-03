@@ -3,7 +3,7 @@
 // =================================================================
 
 // ── Core ─────────────────────────────────────────────────────────
-export { GotApiEngine, createEngine } from "./core/engine";
+export { GotApiEngine, createEngine, mergeEngineConfig } from "./core/engine";
 
 // ── Types ─────────────────────────────────────────────────────────
 export type {
@@ -17,6 +17,9 @@ export type {
   AuthMode,
   AuthProvider,
   LoggerInterface,
+  LogLevel,
+  ResponseType,
+  ParamValue,
   ZodLike,
   RequestHook,
   ResponseHook,
@@ -24,6 +27,8 @@ export type {
   RequestHookContext,
   ResponseHookContext,
   ErrorHookContext,
+  RefreshAuthHook,
+  RefreshAuthContext,
   RetryConfig,
   CacheConfig,
   CacheStore,
@@ -48,7 +53,12 @@ export {
   SsrfError,
   assertUrlAllowed,
   buildRedactor,
+  buildGuardedLookup,
+  findSsrfError,
+  isPrivateAddress,
+  redactUrl,
   resolveSsrfConfig,
+  withRedaction,
 } from "./core/security";
 
 // ── Auth Providers ────────────────────────────────────────────────
@@ -58,10 +68,20 @@ export {
   NextAuthProvider,
   BrowserStorageAuthProvider,
   ApiKeyAuthProvider,
+  BasicAuthProvider,
+  RefreshableAuthProvider,
   createStaticAuth,
   createDynamicAuth,
   createNextAuthProvider,
   createBrowserStorageAuth,
+  createApiKeyAuth,
+  createBasicAuth,
+  createRefreshableAuth,
+} from "./plugins/auth-providers";
+export type {
+  NextAuthSession,
+  RefreshableAuthOptions,
+  RefreshedToken,
 } from "./plugins/auth-providers";
 
 // ── Logger utilities ──────────────────────────────────────────────
@@ -78,4 +98,5 @@ export {
 } from "./utils/helpers";
 
 // ── Node/vanilla adapter (batch, retry) ───────────────────────────
-export { batchRequests, withRetry } from "./adapters/node";
+export { batchRequests, withRetry, BatchRequestError } from "./adapters/node";
+export type { BatchRequestItem, BatchOptions, WithRetryOptions } from "./adapters/node";

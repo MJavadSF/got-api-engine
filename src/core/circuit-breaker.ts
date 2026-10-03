@@ -2,8 +2,11 @@
 // got-api-engine — Circuit Breaker
 //
 // Classic three-state breaker (closed → open → half-open) with both
-// consecutive-failure and rolling failure-rate tripping. Prevents a failing
-// upstream from consuming resources and gives it time to recover.
+// consecutive-failure and rolling failure-rate tripping. In half-open only a
+// bounded number of probe requests are let through.
+//
+// Protocol: every attempt that got `true` from `tryAcquire()` MUST report its
+// outcome exactly once via recordSuccess(), recordFailure() or recordNeutral().
 // =================================================================
 
 import type {
@@ -18,6 +21,7 @@ export class CircuitBreaker {
   private state: CircuitState = "closed";
   private consecutiveFailures = 0;
   private halfOpenSuccesses = 0;
+  private halfOpenInFlight = 0;
   private openedAt = 0;
 
   // Rolling window of recent outcomes (true = failure).
@@ -28,16 +32,18 @@ export class CircuitBreaker {
   private readonly rollingWindow: number;
   private readonly resetTimeoutMs: number;
   private readonly successThreshold: number;
+  private readonly halfOpenMaxConcurrent: number;
   private readonly failureStatusCodes: Set<number>;
 
-  private onChange: CircuitStateChangeListener | undefined;
+  private readonly onChange: CircuitStateChangeListener | undefined;
 
   constructor(config: CircuitBreakerConfig, onChange?: CircuitStateChangeListener) {
-    this.failureThreshold = config.failureThreshold ?? 5;
+    this.failureThreshold = Math.max(1, config.failureThreshold ?? 5);
     this.failureRateThreshold = config.failureRateThreshold;
     this.rollingWindow = Math.max(1, config.rollingWindow ?? 20);
     this.resetTimeoutMs = config.resetTimeoutMs ?? 30_000;
-    this.successThreshold = config.successThreshold ?? 2;
+    this.successThreshold = Math.max(1, config.successThreshold ?? 2);
+    this.halfOpenMaxConcurrent = Math.max(1, config.halfOpenMaxConcurrent ?? 1);
     this.failureStatusCodes = new Set(config.failureStatusCodes ?? [500, 502, 503, 504]);
     this.onChange = onChange;
   }
@@ -50,20 +56,29 @@ export class CircuitBreaker {
   getState(): CircuitState {
     // Lazily transition open → half-open once the cooldown has elapsed.
     if (this.state === "open" && Date.now() - this.openedAt >= this.resetTimeoutMs) {
+      this.halfOpenInFlight = 0;
+      this.halfOpenSuccesses = 0;
       this.transition("half-open");
     }
     return this.state;
   }
 
-  /** Returns true if the request should be allowed through. */
-  canRequest(): boolean {
+  /**
+   * Ask permission to send a request. In half-open this reserves one of the
+   * limited probe slots.
+   */
+  tryAcquire(): boolean {
     const state = this.getState();
-    return state !== "open";
+    if (state === "closed") return true;
+    if (state === "open") return false;
+    if (this.halfOpenInFlight >= this.halfOpenMaxConcurrent) return false;
+    this.halfOpenInFlight++;
+    return true;
   }
 
   /** Milliseconds until the breaker will next allow a probe (0 if allowed now). */
   retryAfterMs(): number {
-    if (this.state !== "open") return 0;
+    if (this.getState() !== "open") return 0;
     return Math.max(0, this.resetTimeoutMs - (Date.now() - this.openedAt));
   }
 
@@ -71,11 +86,10 @@ export class CircuitBreaker {
     this.pushWindow(false);
 
     if (this.state === "half-open") {
+      this.halfOpenInFlight = Math.max(0, this.halfOpenInFlight - 1);
       this.halfOpenSuccesses++;
-      if (this.halfOpenSuccesses >= this.successThreshold) {
-        this.reset();
-      }
-    } else {
+      if (this.halfOpenSuccesses >= this.successThreshold) this.reset();
+    } else if (this.state === "closed") {
       this.consecutiveFailures = 0;
     }
   }
@@ -88,6 +102,9 @@ export class CircuitBreaker {
       this.open();
       return;
     }
+    // Late failures from requests that started before the breaker opened must
+    // not extend the cooldown.
+    if (this.state === "open") return;
 
     this.consecutiveFailures++;
 
@@ -98,14 +115,19 @@ export class CircuitBreaker {
 
     if (this.failureRateThreshold !== undefined && this.window.length >= this.rollingWindow) {
       const failures = this.window.reduce((n, f) => n + (f ? 1 : 0), 0);
-      const rate = failures / this.window.length;
-      if (rate >= this.failureRateThreshold) this.open();
+      if (failures / this.window.length >= this.failureRateThreshold) this.open();
     }
+  }
+
+  /** Release a probe slot without counting success or failure (e.g. aborted request). */
+  recordNeutral(): void {
+    if (this.state === "half-open") this.halfOpenInFlight = Math.max(0, this.halfOpenInFlight - 1);
   }
 
   reset(): void {
     this.consecutiveFailures = 0;
     this.halfOpenSuccesses = 0;
+    this.halfOpenInFlight = 0;
     this.window.length = 0;
     this.transition("closed");
   }
@@ -113,6 +135,7 @@ export class CircuitBreaker {
   private open(): void {
     this.openedAt = Date.now();
     this.halfOpenSuccesses = 0;
+    this.halfOpenInFlight = 0;
     this.transition("open");
   }
 
