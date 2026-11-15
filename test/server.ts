@@ -9,11 +9,7 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
-type Handler = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  ctx: { hit: number; body: string },
-) => void | Promise<void>;
+type Handler = (req: http.IncomingMessage, res: http.ServerResponse, ctx: { hit: number; body: string }) => void | Promise<void>;
 
 export async function startServer(handler: Handler): Promise<TestServer> {
   const state: TestServer = {

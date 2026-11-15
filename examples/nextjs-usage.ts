@@ -3,10 +3,10 @@
 // Next.js App Router (13 → 16): Route Handlers + Server Actions
 // =================================================================
 
-import { createNextEngine } from "got-api-engine/next";
 import { createNextAuthProvider } from "got-api-engine";
-import { auth } from "@/lib/auth"; // Auth.js (next-auth v5) — your config
+import { createNextEngine } from "got-api-engine/next";
 import { z } from "zod";
+import { auth } from "@/lib/auth"; // Auth.js (next-auth v5) — your config
 
 // ── 1. Create ONE engine instance (share it across your app) ─────
 export const apiEngine = createNextEngine({
@@ -88,14 +88,12 @@ export async function createUserAction(data: { name: string; email: string }) {
 // ── 7. Compact route files with buildRouteHandlers() ─────────────
 const routes = apiEngine.buildRouteHandlers();
 export const GET2 = (req: Request) => routes.GET(req, "/products");
-export const POST2 = (req: Request) =>
-  routes.POST(req, { endpoint: "/products", schema: z.looseObject({}) });
+export const POST2 = (req: Request) => routes.POST(req, { endpoint: "/products", schema: z.looseObject({}) });
 
 // ── 8. Security knobs for proxies ────────────────────────────────
 // • By default a Route Handler only forwards the caller's own Authorization
 //   header. It never falls back to the engine's service credentials, because
 //   that would let anonymous visitors act with them. Opt in explicitly:
-export const SERVICE_PUBLIC = (req: Request) =>
-  apiEngine.handleRoute(req, { endpoint: "/catalog", useEngineAuth: true });
+export const SERVICE_PUBLIC = (req: Request) => apiEngine.handleRoute(req, { endpoint: "/catalog", useEngineAuth: true });
 // • Backend 5xx bodies are not echoed to the browser (they may contain stack
 //   traces); 4xx field errors are. Override with `exposeUpstreamDetails`.

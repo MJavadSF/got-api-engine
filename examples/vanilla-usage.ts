@@ -1,18 +1,18 @@
 // =================================================================
 // examples/vanilla-usage.ts
-// Node.js / Plain JavaScript / React (browser-side) usage
+// Node.js / plain JavaScript usage (the engine runs on Node.js only)
 // =================================================================
 
 import {
-  createEngine,
-  createStaticAuth,
-  createDynamicAuth,
-  createBrowserStorageAuth,
+  BatchRequestError,
+  batchRequests,
   createApiKeyAuth,
   createBasicAuth,
-  batchRequests,
+  createDynamicAuth,
+  createEngine,
+  createOAuth2ClientCredentials,
+  createStaticAuth,
   withRetry,
-  BatchRequestError,
 } from "got-api-engine";
 
 // ── 1. Basic instance ─────────────────────────────────────────────
@@ -32,17 +32,18 @@ if (users.ok) {
 }
 
 // Typed response
-interface User { id: number; name: string; email: string; }
+interface User {
+  id: number;
+  name: string;
+  email: string;
+}
 const user = await api.get<User>("/users/1");
 if (user.ok) {
   console.log(user.data.name); // ✅ typed
 }
 
 // POST with body
-const created = await api.post<User, { name: string; email: string }>(
-  "/users",
-  { name: "Ali", email: "ali@example.com" },
-);
+const created = await api.post<User, { name: string; email: string }>("/users", { name: "Ali", email: "ali@example.com" });
 
 // ── 2. Static auth token ──────────────────────────────────────────
 const authedApi = createEngine({
@@ -55,20 +56,19 @@ const authedApi = createEngine({
 // ── 3. Dynamic auth (e.g. refresh token each call) ────────────────
 const dynamicApi = createEngine({
   baseUrl: "https://api.example.com",
-  auth: createDynamicAuth(async () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) return null;
-
-    // Optionally refresh if expired...
-    return token;
-  }),
+  auth: createDynamicAuth(async () => process.env.ACCESS_TOKEN ?? null),
 });
 
-// ── 4. Browser localStorage auth ─────────────────────────────────
-const browserApi = createEngine({
+// ── 4. Service-to-service: OAuth 2.0 client credentials ──────────
+// Token is cached, refreshed before expiry and after an upstream 401.
+const serviceApi = createEngine({
   baseUrl: "https://api.example.com",
-  auth: createBrowserStorageAuth("jwt_token", "localStorage"),
-  debug: false,
+  auth: createOAuth2ClientCredentials({
+    tokenUrl: "https://idp.example.com/oauth/token",
+    clientId: process.env.CLIENT_ID ?? "",
+    clientSecret: process.env.CLIENT_SECRET ?? "",
+    scope: ["orders:read"],
+  }),
 });
 
 // ── 4b. API key / Basic auth ─────────────────────────────────────
@@ -117,10 +117,7 @@ const v2Api = api.extend({
 });
 
 // ── 9. Batch requests (parallel) ─────────────────────────────────
-const [usersResult, postsResult] = await Promise.all([
-  api.get("/users"),
-  api.get("/posts"),
-]);
+const [usersResult, postsResult] = await Promise.all([api.get("/users"), api.get("/posts")]);
 
 // Or with batchRequests for keyed results:
 const batchResult = await batchRequests(api, [
@@ -214,5 +211,7 @@ if (validatedUser.ok) {
 }
 
 // ── 13. Cleanup ───────────────────────────────────────────────────
-await Promise.all([api, authedApi, dynamicApi, browserApi, keyApi, basicApi, trackedApi, adminApi, v2Api, apiWithPino].map((e) => e.dispose()));
+await Promise.all(
+  [api, authedApi, dynamicApi, serviceApi, keyApi, basicApi, trackedApi, adminApi, v2Api, apiWithPino].map((e) => e.dispose()),
+);
 void [users, created, result, filtered, usersResult, postsResult, batchResult, batch2, resilientResult];

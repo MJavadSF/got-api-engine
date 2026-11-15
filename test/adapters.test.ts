@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createNextEngine, type NextApiEngine } from "../src/adapters/next/index";
 import {
   ApiKeyAuthProvider,
+  type ApiResult,
   BasicAuthProvider,
   BatchRequestError,
   batchRequests,
   createEngine,
   createRefreshableAuth,
-  withRetry,
-  type ApiResult,
   type GotApiEngine,
+  withRetry,
 } from "../src/index";
-import { createNextEngine, type NextApiEngine } from "../src/adapters/next";
 import { json, sleep, startServer, type TestServer } from "./server";
 
 const servers: TestServer[] = [];
@@ -77,7 +77,11 @@ describe("next adapter: handleRoute", () => {
     const s = await serve((r, res, ctx) => json(res, 200, { url: r.url, auth: r.headers.authorization, body: ctx.body }));
     const api = next({ baseUrl: s.url });
     const res = await api.handleRoute(
-      req("/api/items?x=1&y=2", { method: "POST", headers: { authorization: "Bearer u", "content-type": "application/json" }, body: '{"a":1}' }),
+      req("/api/items?x=1&y=2", {
+        method: "POST",
+        headers: { authorization: "Bearer u", "content-type": "application/json" },
+        body: '{"a":1}',
+      }),
       { endpoint: "/items", method: "POST" },
     );
     expect(res.status).toBe(200);
@@ -121,10 +125,10 @@ describe("next adapter: handleRoute", () => {
   it("empty body with JSON content-type is not an error", async () => {
     const s = await serve((_req, res) => json(res, 200, { ok: true }));
     const api = next({ baseUrl: s.url, defaultAuth: false });
-    const res = await api.handleRoute(
-      req("/api/x", { method: "DELETE", headers: { "content-type": "application/json" } }),
-      { endpoint: "/x", method: "DELETE" },
-    );
+    const res = await api.handleRoute(req("/api/x", { method: "DELETE", headers: { "content-type": "application/json" } }), {
+      endpoint: "/x",
+      method: "DELETE",
+    });
     expect(res.status).toBe(200);
   });
 
@@ -149,7 +153,11 @@ describe("next adapter: handleRoute", () => {
   it("passes binary and text responses through with their content-type, plus allow-listed headers", async () => {
     const s = await serve((r, res) => {
       if (r.url === "/bin") {
-        res.writeHead(200, { "content-type": "application/pdf", "content-disposition": 'attachment; filename="a.pdf"', "set-cookie": "sid=1" });
+        res.writeHead(200, {
+          "content-type": "application/pdf",
+          "content-disposition": 'attachment; filename="a.pdf"',
+          "set-cookie": "sid=1",
+        });
         return void res.end(Buffer.from([37, 80, 68, 70, 0, 255]));
       }
       res.writeHead(200, { "content-type": "text/csv" });
@@ -177,7 +185,9 @@ describe("next adapter: handleRoute", () => {
 
   it("forwards upstream 4xx details but hides 5xx internals by default", async () => {
     const s = await serve((r, res) =>
-      r.url === "/four" ? json(res, 422, { message: "bad", fields: { a: "x" } }) : json(res, 500, { message: "boom", stack: "secret at /srv/app.js" }),
+      r.url === "/four"
+        ? json(res, 422, { message: "bad", fields: { a: "x" } })
+        : json(res, 500, { message: "boom", stack: "secret at /srv/app.js" }),
     );
     const api = next({ baseUrl: s.url, defaultAuth: false, retry: { limit: 0 } });
     const four = await api.handleRoute(req("/api/x"), { endpoint: "/four" });
@@ -286,15 +296,23 @@ describe("batchRequests", () => {
 });
 
 describe("withRetry", () => {
-  const fail = (status: number, code?: string): ApiResult<number> => ({ ok: false, error: "x", status, ...(code ? { code } : {}) });
+  const fail = (status: number, code?: string): ApiResult<number> => ({
+    ok: false,
+    error: "x",
+    status,
+    ...(code ? { code } : {}),
+  });
 
   it("retries transient failures with backoff and stops on success", async () => {
     let calls = 0;
     const seen: number[] = [];
-    const r = await withRetry<number>(async (attempt) => {
-      seen.push(attempt);
-      return ++calls < 3 ? fail(503) : { ok: true as const, data: 1, status: 200 };
-    }, { baseDelayMs: 1, jitter: 0 });
+    const r = await withRetry<number>(
+      async (attempt) => {
+        seen.push(attempt);
+        return ++calls < 3 ? fail(503) : { ok: true as const, data: 1, status: 200 };
+      },
+      { baseDelayMs: 1, jitter: 0 },
+    );
     expect(r.ok).toBe(true);
     expect(seen).toEqual([0, 1, 2]);
   });

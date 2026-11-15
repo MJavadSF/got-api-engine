@@ -1,8 +1,9 @@
 {
   "name": "got-api-engine",
-  "version": "3.0.0",
-  "description": "A modular, framework-agnostic HTTP proxy engine built on got 16 — circuit breaker, response caching (SWR / stale-if-error), rate limiting, request dedupe, retries with backoff, 401 token refresh, SSRF & credential-leak protection, metrics, and first-class Next.js / Node.js support.",
+  "version": "4.0.0",
+  "description": "A modular HTTP engine for Node.js and Next.js on got 16 — typed endpoints, middleware, per-host circuit breakers, caching (SWR, tags, Redis), rate limiting, bulkheads, hedging, retries with budgets, failover, 401 refresh, SSRF / credential-leak protection, metrics (Prometheus) and tracing (OpenTelemetry).",
   "type": "commonjs",
+  "license": "MIT",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",
@@ -37,32 +38,75 @@
         "default": "./dist/adapters/node.cjs"
       }
     },
+    "./redis": {
+      "import": {
+        "types": "./dist/redis.d.mts",
+        "default": "./dist/redis.mjs"
+      },
+      "require": {
+        "types": "./dist/redis.d.cts",
+        "default": "./dist/redis.cjs"
+      }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/testing.d.mts",
+        "default": "./dist/testing.mjs"
+      },
+      "require": {
+        "types": "./dist/testing.d.cts",
+        "default": "./dist/testing.cjs"
+      }
+    },
+    "./codegen": {
+      "import": {
+        "types": "./dist/codegen.d.mts",
+        "default": "./dist/codegen.mjs"
+      },
+      "require": {
+        "types": "./dist/codegen.d.cts",
+        "default": "./dist/codegen.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "src",
     "README.md",
     "LICENSE",
+    "SECURITY.md",
     "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.examples.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint:package": "publint && attw --pack . --profile node16",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+    "check": "npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run lint:package",
+    "prepublishOnly": "npm run build",
+    "test:next": "node test/next-app/run.mjs --next 15"
   },
   "keywords": [
     "api",
     "auth",
+    "bff",
+    "bulkhead",
     "cache",
     "circuit-breaker",
+    "codegen",
     "dedupe",
+    "failover",
     "fetch",
     "got",
     "got-16",
+    "hedging",
     "http",
     "http2",
     "logging",
@@ -70,25 +114,28 @@
     "middleware",
     "nextjs",
     "observability",
+    "openapi",
+    "opentelemetry",
+    "prometheus",
     "proxy",
     "rate-limit",
-    "react",
+    "redis",
     "resilience",
     "retry",
     "ssrf",
     "stale-while-revalidate",
+    "standard-schema",
     "token-refresh",
     "typescript",
-    "typescript-7",
     "validation",
-    "zod"
+    "persian",
+    "iran"
   ],
   "author": {
     "name": "Mohammad Javad",
     "email": "mjavadsf72@gmail.com",
     "url": "https://github.com/MJavadSF"
   },
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MJavadSF/got-api-engine.git"
@@ -98,40 +145,36 @@
     "url": "https://github.com/MJavadSF/got-api-engine/issues"
   },
   "peerDependencies": {
-    "next": ">=13.0.0",
-    "react": ">=19.2.0",
-    "winston": ">=3.0.0",
-    "zod": ">=3.0.0"
+    "winston": ">=3.0.0"
   },
   "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    },
-    "react": {
-      "optional": true
-    },
     "winston": {
-      "optional": true
-    },
-    "zod": {
       "optional": true
     }
   },
   "dependencies": {
-    "got": "^16.0.0"
+    "got": "^16.2.0"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
-    "@types/node": "^22.20.4",
+    "@biomejs/biome": "^2.6.7",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.1.0",
     "publint": "^0.3.25",
-    "tsdown": "^0.23.0",
+    "tsdown": "^0.23.7",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3",
     "winston": "^3.19.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "bin": {
+    "got-api-engine-codegen": "./dist/cli.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

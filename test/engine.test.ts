@@ -168,7 +168,11 @@ describe("retries", () => {
 
   it("retries POST when an Idempotency-Key is present, reusing the same key", async () => {
     const s = await serve((_req, res, ctx) => (ctx.hit < 3 ? json(res, 503, {}) : json(res, 200, { ok: 1 })));
-    const r = await engine({ baseUrl: s.url, defaultAuth: false, retry: fastRetry }).post("/pay", { a: 1 }, { idempotencyKey: "k-1" });
+    const r = await engine({ baseUrl: s.url, defaultAuth: false, retry: fastRetry }).post(
+      "/pay",
+      { a: 1 },
+      { idempotencyKey: "k-1" },
+    );
     expect(r.ok).toBe(true);
     expect(s.hits).toBe(3);
     expect(new Set(s.requests.map((q) => q.headers["idempotency-key"]))).toEqual(new Set(["k-1"]));
@@ -218,7 +222,11 @@ describe("retries", () => {
 
   it("Retry-After: 0 retries immediately", async () => {
     const s = await serve((_req, res, ctx) => (ctx.hit < 2 ? json(res, 429, {}, { "retry-after": "0" }) : json(res, 200, {})));
-    const r = await engine({ baseUrl: s.url, defaultAuth: false, retry: { ...fastRetry, baseDelayMs: 5_000, maxDelayMs: 5_000 } }).get("/x");
+    const r = await engine({
+      baseUrl: s.url,
+      defaultAuth: false,
+      retry: { ...fastRetry, baseDelayMs: 5_000, maxDelayMs: 5_000 },
+    }).get("/x");
     expect(r.ok).toBe(true);
   });
 
@@ -348,7 +356,12 @@ describe("cache", () => {
   it("without staleIfError the error is returned", async () => {
     let healthy = true;
     const s = await serve((_req, res) => (healthy ? json(res, 200, {}) : json(res, 503, {})));
-    const api = engine({ baseUrl: s.url, defaultAuth: false, retry: { ...fastRetry, limit: 0 }, cache: { enabled: true, ttlMs: 10 } });
+    const api = engine({
+      baseUrl: s.url,
+      defaultAuth: false,
+      retry: { ...fastRetry, limit: 0 },
+      cache: { enabled: true, ttlMs: 10 },
+    });
     await api.get("/x");
     await sleep(30);
     healthy = false;
@@ -412,7 +425,11 @@ describe("dedupe", () => {
       json(res, 200, { list: [1] });
     });
     const api = engine({ baseUrl: s.url, defaultAuth: false });
-    const [a, b, c] = await Promise.all([api.get<{ list: number[] }>("/x"), api.get<{ list: number[] }>("/x"), api.get<{ list: number[] }>("/x")]);
+    const [a, b, c] = await Promise.all([
+      api.get<{ list: number[] }>("/x"),
+      api.get<{ list: number[] }>("/x"),
+      api.get<{ list: number[] }>("/x"),
+    ]);
     expect(s.hits).toBe(1);
     expect([a.meta?.deduped, b.meta?.deduped, c.meta?.deduped].filter(Boolean)).toHaveLength(2);
     a.ok && a.data.list.push(2);
@@ -544,9 +561,7 @@ describe("circuit breaker + rate limiter", () => {
       rateLimit: { enabled: true, requestsPerInterval: 10, intervalMs: 100, burst: 2, onLimit: "wait" },
     });
     const t0 = Date.now();
-    const rs = await Promise.all(
-      Array.from({ length: 6 }, (_, i) => api.get("/x", { headers: { "X-N": String(i) } })),
-    );
+    const rs = await Promise.all(Array.from({ length: 6 }, (_, i) => api.get("/x", { headers: { "X-N": String(i) } })));
     expect(rs.every((r) => r.ok)).toBe(true);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(30);
     expect(s.requests.map((q) => q.headers["x-n"])).toEqual(["0", "1", "2", "3", "4", "5"]);
@@ -693,8 +708,8 @@ describe("SSRF protection (end-to-end)", () => {
   it("blocks private targets before connecting", async () => {
     const s = await serve((_req, res) => json(res, 200, {}));
     const api = engine({ baseUrl: "https://api.example.test", defaultAuth: false, ssrfProtection: true });
-    expect(await api.get(s.url + "/x")).toMatchObject({ ok: false, status: 403, code: "SSRF_BLOCKED" });
-    expect(await api.get("http://[::ffff:127.0.0.1]:" + s.port + "/x")).toMatchObject({ code: "SSRF_BLOCKED" });
+    expect(await api.get(`${s.url}/x`)).toMatchObject({ ok: false, status: 403, code: "SSRF_BLOCKED" });
+    expect(await api.get(`http://[::ffff:127.0.0.1]:${s.port}/x`)).toMatchObject({ code: "SSRF_BLOCKED" });
     expect(s.hits).toBe(0);
   });
 
@@ -731,7 +746,7 @@ describe("SSRF protection (end-to-end)", () => {
       defaultAuth: false,
       ssrfProtection: { allowPrivateNetworks: true },
     });
-    const r = await api.get<{ b: boolean }>(other.url + "/a");
+    const r = await api.get<{ b: boolean }>(`${other.url}/a`);
     expect(r.ok && r.data.b).toBe(true);
   });
 });
@@ -819,7 +834,7 @@ describe("extend()", () => {
     engines.push(forked);
 
     // SSRF protection survived the fork
-    expect(await forked.get(s.url + "/x")).toMatchObject({ code: "SSRF_BLOCKED" });
+    expect(await forked.get(`${s.url}/x`)).toMatchObject({ code: "SSRF_BLOCKED" });
     // metrics + circuit config survived
     expect(forked.getMetrics()).not.toBeNull();
     expect(forked.getCircuitState()).toBe("closed");
@@ -848,20 +863,6 @@ describe("extend()", () => {
     await sleep(10);
     await child.get("/x");
     expect(s.hits).toBe(2); // cache still enabled, ttl 1ms → expired
-  });
-});
-
-describe("TLS default", () => {
-  it("verifies certificates by default in every NODE_ENV (was: disabled unless NODE_ENV=production)", async () => {
-    const prev = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-    try {
-      const api = engine({ baseUrl: "https://api.example.test" });
-      // @ts-expect-error reading a protected field for verification
-      expect(api.config.rejectUnauthorized).toBe(true);
-    } finally {
-      process.env.NODE_ENV = prev;
-    }
   });
 });
 

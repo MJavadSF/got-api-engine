@@ -1,0 +1,17 @@
+/* Persian pages: a Persian-first font, while code stays LTR. */
+@import url("https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css");
+
+html[lang="fa-IR"] {
+  --vp-font-family-base: "Vazirmatn", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html[dir="rtl"] .vp-doc div[class*="language-"],
+html[dir="rtl"] .vp-doc pre,
+html[dir="rtl"] .vp-doc code {
+  direction: ltr;
+  text-align: left;
+}
+
+html[dir="rtl"] .vp-doc table {
+  direction: rtl;
+}

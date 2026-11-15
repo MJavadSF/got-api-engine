@@ -3,8 +3,8 @@
 // Resilience, security & observability (v3)
 // =================================================================
 
+import type { CachedResponse, CacheStore } from "got-api-engine";
 import { createEngine, createRefreshableAuth } from "got-api-engine";
-import type { CacheStore, CachedResponse } from "got-api-engine";
 
 // ── 1. Fully-loaded resilient engine ─────────────────────────────
 const tokens = createRefreshableAuth({
@@ -185,4 +185,4 @@ async function scoped() {
   return tmp.get("/ping");
 }
 
-export { api, apiWithStore, safeProxy, multiHost, adminApi, reads, writes, observe, control, foreign, shutdown, scoped };
+export { adminApi, api, apiWithStore, control, foreign, multiHost, observe, reads, safeProxy, scoped, shutdown, writes };

@@ -1,25 +1,31 @@
-// =================================================================
-// got-api-engine/node — Node.js / Vanilla JS Adapter
-// Use this outside of Next.js (plain Node, Express, Fastify, etc.)
-// =================================================================
+/**
+ * Node.js helpers: batched requests and a standalone retry helper.
+ *
+ * @packageDocumentation
+ * @module got-api-engine/node
+ */
+// ── got-api-engine/node — batch and retry helpers ────────────────
 
-import { GotApiEngine, createEngine } from "../core/engine";
-import type { EngineConfig, RequestOptions, ApiResult, ErrorResult } from "../types/index";
-import { sleep } from "../core/backoff";
+import { createEngine, GotApiEngine } from "../core/engine";
+import { backoffDelay, sleep } from "../resilience/backoff";
+import type { EngineConfig } from "../types/config";
+import type { RequestOptions } from "../types/request";
+import type { ApiResult, ErrorResult } from "../types/result";
 
-// Re-export everything from core for convenience
-export { GotApiEngine, createEngine };
-export type { EngineConfig, RequestOptions, ApiResult };
+export type { ApiResult, EngineConfig, RequestOptions };
+export { createEngine, GotApiEngine };
 
 // ── Batch requests ───────────────────────────────────────────────
-export interface BatchRequestItem<TResponse = unknown, TBody = unknown> {
-  key: string;
+export interface BatchRequestItem<K extends string = string, TResponse = unknown, TBody = unknown> {
+  key: K;
   options: RequestOptions<TBody, TResponse>;
 }
 
-export type BatchResult<T extends Record<string, ApiResult>> = T;
+/** Result record typed by item keys: `{ users: ApiResult<User[]>, … }`. */
+export type BatchResults<Items extends readonly BatchRequestItem[]> = {
+  [I in Items[number] as I["key"]]: I extends BatchRequestItem<string, infer R> ? ApiResult<R> : ApiResult;
+};
 
-/** Thrown by `batchRequests` in `failFast` mode. */
 export class BatchRequestError extends Error {
   constructor(
     message: string,
@@ -33,26 +39,19 @@ export class BatchRequestError extends Error {
 }
 
 export interface BatchOptions {
-  /** Maximum concurrent requests. Defaults to all at once. */
+  /** Max concurrent requests. @default all at once */
   concurrency?: number;
-  /**
-   * Stop on first failure: unstarted requests are skipped and in-flight ones
-   * are aborted, then a `BatchRequestError` is thrown. @default false
-   */
+  /** Stop on first failure (abort in-flight, skip the rest) and throw. @default false */
   failFast?: boolean;
-  /** Cancel the whole batch. */
   signal?: AbortSignal;
 }
 
-export async function batchRequests<
-  TResults extends Record<string, ApiResult> = Record<string, ApiResult>,
->(
+export async function batchRequests<const Items extends readonly BatchRequestItem[]>(
   engine: GotApiEngine,
-  requests: BatchRequestItem[],
+  requests: Items,
   options?: BatchOptions,
-): Promise<TResults> {
+): Promise<BatchResults<Items>> {
   const { failFast = false, signal } = options ?? {};
-
   const seen = new Set<string>();
   for (const r of requests) {
     if (seen.has(r.key)) throw new TypeError(`batchRequests: duplicate key "${r.key}".`);
@@ -71,18 +70,12 @@ export async function batchRequests<
 
   const worker = async (): Promise<void> => {
     for (;;) {
-      if (failFast && failure) return;
-      if (controller.signal.aborted) return;
-      const index = cursor++;
-      const item = requests[index];
+      if ((failFast && failure) || controller.signal.aborted) return;
+      const item = requests[cursor++];
       if (!item) return;
-
-      const itemSignal = item.options.signal
-        ? AbortSignal.any([item.options.signal, controller.signal])
-        : controller.signal;
-
+      const itemSignal = item.options.signal ? AbortSignal.any([item.options.signal, controller.signal]) : controller.signal;
       try {
-        const res = await engine.request({ ...item.options, signal: itemSignal });
+        const res = await engine.request({ ...item.options, signal: itemSignal, throwOnError: false });
         results.set(item.key, res);
         if (failFast && !res.ok && !failure) {
           failure = new BatchRequestError(res.error, item.key, res);
@@ -90,7 +83,7 @@ export async function batchRequests<
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Request failed";
-        results.set(item.key, { ok: false, error: message, status: 500, code: "NETWORK_ERROR" });
+        results.set(item.key, { ok: false, error: message, status: 500, code: "INTERNAL_ERROR" });
         if (failFast && !failure) {
           failure = new BatchRequestError(message, item.key, undefined, err);
           controller.abort(failure);
@@ -100,44 +93,45 @@ export async function batchRequests<
   };
 
   try {
-    await Promise.all(Array.from({ length: limit }, () => worker()));
+    await Promise.all(Array.from({ length: limit }, worker));
   } finally {
     signal?.removeEventListener("abort", onOuterAbort);
   }
-
   if (failure) throw failure;
 
-  // Requests that never started (batch aborted by the caller's signal).
   for (const item of requests) {
-    if (!results.has(item.key)) {
-      results.set(item.key, { ok: false, error: "Request aborted.", status: 499, code: "ABORTED" });
-    }
+    if (!results.has(item.key)) results.set(item.key, { ok: false, error: "Request aborted.", status: 499, code: "ABORTED" });
   }
   // Object.fromEntries defines own properties, so a key like "__proto__" is safe.
-  return Object.fromEntries(requests.map((r) => [r.key, results.get(r.key)!])) as TResults;
+  return Object.fromEntries(requests.map((r) => [r.key, results.get(r.key)])) as BatchResults<Items>;
 }
 
-// ── Retry helper with exponential backoff (outside the engine's own retry) ──
+// ── Retry helper (outside the engine's own retry layer) ─────────
 export interface WithRetryOptions<T> {
   retries?: number;
   baseDelayMs?: number;
-  /** Cap for a single delay. @default 10000 */
+  /** Cap for a single computed delay. @default 10000 */
   maxDelayMs?: number;
-  /** ±jitter fraction applied to each delay. @default 0.2 */
+  /** @default 0.2 */
   jitter?: number;
   shouldRetry?: (result: ApiResult<T>) => boolean;
   signal?: AbortSignal;
   onRetry?: (info: { attempt: number; delayMs: number; result: ApiResult<T> }) => void;
 }
 
-/**
- * Default policy: transient failures only — network errors, 408/425/429 and
- * 5xx except 501/505. Client aborts and 4xx validation errors are never retried.
- */
+const NEVER_RETRY = new Set([
+  "ABORTED",
+  "REQUEST_VALIDATION",
+  "REQUEST_INVALID",
+  "SSRF_BLOCKED",
+  "AUTH_REQUIRED",
+  "CREDENTIALS_BLOCKED",
+  "INVALID_URL",
+]);
+
+/** Transient failures only: network, 408/425/429 and 5xx except 501/505. */
 function defaultShouldRetry<T>(r: ApiResult<T>): boolean {
-  if (r.ok) return false;
-  if (r.code === "ABORTED" || r.code === "REQUEST_VALIDATION" || r.code === "SSRF_BLOCKED") return false;
-  if (r.code === "AUTH_REQUIRED" || r.code === "CREDENTIALS_BLOCKED") return false;
+  if (r.ok || (r.code && NEVER_RETRY.has(r.code))) return false;
   return [408, 425, 429].includes(r.status) || (r.status >= 500 && r.status !== 501 && r.status !== 505);
 }
 
@@ -154,18 +148,15 @@ export async function withRetry<T>(
     signal,
     onRetry,
   } = options ?? {};
-
   let last: ApiResult<T> | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const result = await fn(attempt);
     if (result.ok || !shouldRetry(result)) return result;
-
     last = result;
     if (attempt < retries) {
-      const exp = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
-      const jittered = Math.max(0, Math.round(exp + (Math.random() * 2 - 1) * exp * jitter));
-      const hinted = result.meta?.retryAfterMs;
-      const delayMs = hinted !== undefined ? Math.min(maxDelayMs, Math.max(jittered, hinted)) : jittered;
+      const computed = backoffDelay(attempt, { baseDelayMs, maxDelayMs, jitter });
+      // The server's Retry-After is honoured even when it exceeds our own cap.
+      const delayMs = Math.max(computed, result.meta?.retryAfterMs ?? 0);
       onRetry?.({ attempt: attempt + 1, delayMs, result });
       try {
         await sleep(delayMs, signal);

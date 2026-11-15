@@ -12,4 +12,3 @@ declare module "pino" {
   }
   export default function pino(): Pino;
 }
-declare const localStorage: { getItem(key: string): string | null };

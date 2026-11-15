@@ -1,5 +1,15 @@
 node_modules/
 dist/
+coverage/
 *.tgz
 .env
 .env.local
+.idea/
+.vscode/
+.DS_Store
+test/.gen-*/
+test/next-app/.work/
+
+docs/api/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

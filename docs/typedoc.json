@@ -1,0 +1,34 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "../src/index.ts",
+    "../src/adapters/next/index.ts",
+    "../src/adapters/node.ts",
+    "../src/stores/redis.ts",
+    "../src/testing/index.ts",
+    "../src/cli/openapi.ts"
+  ],
+  "tsconfig": "../tsconfig.json",
+  "out": "./api",
+  "plugin": [
+    "typedoc-plugin-markdown",
+    "typedoc-vitepress-theme"
+  ],
+  "docsRoot": ".",
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "skipErrorChecking": false,
+  "entryFileName": "index",
+  "hidePageHeader": true,
+  "sidebar": {
+    "autoConfiguration": true,
+    "format": "vitepress",
+    "pretty": true
+  },
+  "disableGit": true,
+  "sourceLinkTemplate": "https://github.com/MJavadSF/got-api-engine/blob/main/{path}#L{line}",
+  "basePath": "..",
+  "treatWarningsAsErrors": true
+}

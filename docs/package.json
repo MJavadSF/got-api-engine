@@ -1,0 +1,17 @@
+{
+  "name": "got-api-engine-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api": "typedoc",
+    "dev": "npm run api && vitepress dev .",
+    "build": "npm run api && vitepress build .",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "typedoc": "latest",
+    "typedoc-plugin-markdown": "latest",
+    "typedoc-vitepress-theme": "latest",
+    "vitepress": "latest"
+  }
+}

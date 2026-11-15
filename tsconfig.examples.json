@@ -5,8 +5,10 @@
     "noUnusedParameters": false,
     "paths": {
       "got-api-engine": ["./src/index.ts"],
-      "got-api-engine/next": ["./src/adapters/next.ts"],
-      "got-api-engine/node": ["./src/adapters/node.ts"]
+      "got-api-engine/next": ["./src/adapters/next/index.ts"],
+      "got-api-engine/node": ["./src/adapters/node.ts"],
+      "got-api-engine/redis": ["./src/stores/redis.ts"],
+      "got-api-engine/testing": ["./src/testing/index.ts"]
     }
   },
   "include": ["examples/**/*"],

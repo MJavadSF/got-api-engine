@@ -1,36 +1,49 @@
 import { describe, expect, it } from "vitest";
+import { isCredentialTarget } from "../src/security/hosts";
+import { buildRedactor, redactUrl, withRedaction } from "../src/security/redact";
 import {
   assertUrlAllowed,
   buildGuardedLookup,
-  buildRedactor,
   findSsrfError,
-  isCredentialTarget,
   isPrivateAddress,
-  redactUrl,
   resolveSsrfConfig,
   SsrfError,
-  withRedaction,
-} from "../src/core/security";
+} from "../src/security/ssrf";
 import type { LoggerInterface } from "../src/types";
 
 const cfg = resolveSsrfConfig(true)!;
 
 describe("isPrivateAddress", () => {
   it.each([
-    "127.0.0.1", "10.1.2.3", "192.168.1.1", "172.16.0.1", "172.31.255.255", "169.254.169.254",
-    "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "198.18.0.1",
-    "::1", "::", "fc00::1", "fd12:3456::1", "fe80::1", "64:ff9b::7f00:1", "2002:7f00:1::",
-    "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a00:1", "::ffff:169.254.169.254",
+    "127.0.0.1",
+    "10.1.2.3",
+    "192.168.1.1",
+    "172.16.0.1",
+    "172.31.255.255",
+    "169.254.169.254",
+    "100.64.0.1",
+    "0.0.0.0",
+    "224.0.0.1",
+    "255.255.255.255",
+    "198.18.0.1",
+    "::1",
+    "::",
+    "fc00::1",
+    "fd12:3456::1",
+    "fe80::1",
+    "64:ff9b::7f00:1",
+    "2002:7f00:1::",
+    "::ffff:127.0.0.1",
+    "::ffff:7f00:1",
+    "::ffff:a00:1",
+    "::ffff:169.254.169.254",
   ])("%s is private", (ip) => {
     expect(isPrivateAddress(ip)).toBe(true);
   });
 
-  it.each(["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"])(
-    "%s is public",
-    (ip) => {
-      expect(isPrivateAddress(ip)).toBe(false);
-    },
-  );
+  it.each(["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"])("%s is public", (ip) => {
+    expect(isPrivateAddress(ip)).toBe(false);
+  });
 });
 
 describe("assertUrlAllowed", () => {
@@ -70,17 +83,16 @@ describe("assertUrlAllowed", () => {
 });
 
 describe("guarded DNS lookup (connect-time, defeats rebinding)", () => {
-  const fakeLookup =
-    (addrs: string[]) =>
-    (_h: string, _o: unknown, cb: (e: null, a: unknown, f?: number) => void) => {
-      cb(null, addrs.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })));
-    };
+  const fakeLookup = (addrs: string[]) => (_h: string, _o: unknown, cb: (e: null, a: unknown, f?: number) => void) => {
+    cb(
+      null,
+      addrs.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })),
+    );
+  };
 
   it("rejects a public name that resolves to a private address", async () => {
     const lookup = buildGuardedLookup(cfg, fakeLookup(["93.184.216.34", "10.0.0.5"]) as never);
-    const err = await new Promise<Error | null>((resolve) =>
-      lookup("evil.example", { all: true }, (e) => resolve(e)),
-    );
+    const err = await new Promise<Error | null>((resolve) => lookup("evil.example", { all: true }, (e) => resolve(e)));
     expect(err).toBeInstanceOf(SsrfError);
     expect(err?.message).toMatch(/10\.0\.0\.5/);
   });

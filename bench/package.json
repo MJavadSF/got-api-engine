@@ -1,0 +1,16 @@
+{
+  "name": "got-api-engine-bench",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible benchmarks: got-api-engine vs fetch, undici, got, axios, ky, ofetch",
+  "scripts": {
+    "bench": "node run.mjs"
+  },
+  "dependencies": {
+    "axios": "latest",
+    "got": "^16.0.0",
+    "ky": "latest",
+    "ofetch": "latest",
+    "undici": "latest"
+  }
+}

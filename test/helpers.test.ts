@@ -1,17 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  appendParams,
-  buildUrl,
-  classifyContentType,
-  decodeBody,
-  getUserIdFromBearerToken,
-  mergeHeaders,
-  normalizeAuthorization,
-  parseApiError,
-  parseCacheControl,
-  safeStringify,
-} from "../src/utils/helpers";
-import { parseRetryAfter } from "../src/core/backoff";
+import { normalizeAuthorization } from "../src/auth/normalize";
+import { classifyContentType, decodeBody, parseApiError } from "../src/http/decode";
+import { parseCacheControl, parseRetryAfter } from "../src/http/directives";
+import { mergeHeaders } from "../src/http/headers";
+import { getUserIdFromBearerToken, safeStringify } from "../src/http/misc";
+import { appendParams, buildUrl } from "../src/http/url";
 
 describe("safeStringify", () => {
   it("marks true cycles as [Circular]", () => {
@@ -87,8 +80,7 @@ describe("mergeHeaders / normalizeAuthorization", () => {
 });
 
 describe("getUserIdFromBearerToken", () => {
-  const jwt = (payload: unknown) =>
-    `Bearer h.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.s`;
+  const jwt = (payload: unknown) => `Bearer h.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.s`;
 
   it("decodes UTF-8 payloads correctly", () => {
     expect(getUserIdFromBearerToken(jwt({ sub: "کاربر-۱" }))).toBe("کاربر-۱");
@@ -136,7 +128,16 @@ describe("decodeBody", () => {
 
 describe("cache-control + retry-after parsing", () => {
   it("parses cache-control", () => {
-    expect(parseCacheControl("public, max-age=60")).toEqual({ noStore: false, noCache: false, maxAgeMs: 60_000 });
+    expect(parseCacheControl("public, max-age=60")).toMatchObject({ noStore: false, noCache: false, maxAgeMs: 60_000 });
+    expect(
+      parseCacheControl("private, s-maxage=10, must-revalidate, stale-while-revalidate=30, stale-if-error=60"),
+    ).toMatchObject({
+      private: true,
+      sMaxAgeMs: 10_000,
+      mustRevalidate: true,
+      staleWhileRevalidateMs: 30_000,
+      staleIfErrorMs: 60_000,
+    });
     expect(parseCacheControl("no-store").noStore).toBe(true);
     expect(parseCacheControl("no-cache, max-age=5").noCache).toBe(true);
   });
